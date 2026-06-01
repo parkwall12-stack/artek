@@ -9,16 +9,42 @@ var _activeShip     = 'all';
 var _scanTargetId   = null;
 var _scannerRunning = false;
 
-// ── API calls ─────────────────────────────────────────────
-// Everything uses GET to avoid CORS preflight issues
+// ── JSONP — bypasses CORS for Apps Script ─────────────────
 
 function apiFetch(action, payload) {
-  var url = API + '?action=' + encodeURIComponent(action);
-  if (payload) {
-    url += '&payload=' + encodeURIComponent(JSON.stringify(payload));
-  }
-  return fetch(url)
-    .then(function(r) { return r.json(); });
+  return new Promise(function(resolve, reject) {
+    var cbName = 'cb_' + Math.random().toString(36).substr(2, 9);
+    var script = document.createElement('script');
+
+    var url = API + '?action=' + encodeURIComponent(action) + '&callback=' + cbName;
+    if (payload) {
+      url += '&payload=' + encodeURIComponent(JSON.stringify(payload));
+    }
+
+    var timeout = setTimeout(function() {
+      cleanup();
+      reject(new Error('Request timed out'));
+    }, 15000);
+
+    window[cbName] = function(data) {
+      cleanup();
+      resolve(data);
+    };
+
+    function cleanup() {
+      clearTimeout(timeout);
+      delete window[cbName];
+      if (script.parentNode) script.parentNode.removeChild(script);
+    }
+
+    script.onerror = function() {
+      cleanup();
+      reject(new Error('Script load error'));
+    };
+
+    script.src = url;
+    document.head.appendChild(script);
+  });
 }
 
 // ── Tab routing ───────────────────────────────────────────
@@ -51,24 +77,20 @@ function openScanner(targetInputId) {
   document.getElementById('scannerStatus').textContent = 'Starting camera…';
   document.getElementById('scannerStatus').className = 'scanner-status';
 
-  // Stop any existing scanner first
   if (_scannerRunning) {
     try { Quagga.stop(); } catch(e) {}
     try { Quagga.offDetected(); } catch(e) {}
     _scannerRunning = false;
   }
 
-  // Show overlay first, then init camera after DOM updates
   document.getElementById('scannerOverlay').classList.add('active');
 
   setTimeout(function() {
-    var video = document.getElementById('scannerVideo');
-
     Quagga.init({
       inputStream: {
         name: 'Live',
         type: 'LiveStream',
-        target: video,
+        target: document.getElementById('scannerVideo'),
         constraints: {
           facingMode: 'environment',
           width:  { min: 640, ideal: 1280 },
@@ -116,7 +138,7 @@ function openScanner(targetInputId) {
       showToast('Scanned: ' + code, 'success');
       setTimeout(closeScanner, 800);
     });
-  }, 300);
+  }, 400);
 }
 
 function closeScanner() {
