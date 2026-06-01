@@ -10,15 +10,14 @@ var _scanTargetId   = null;
 var _scannerRunning = false;
 
 // ── API calls ─────────────────────────────────────────────
+// Everything uses GET to avoid CORS preflight issues
 
 function apiFetch(action, payload) {
+  var url = API + '?action=' + encodeURIComponent(action);
   if (payload) {
-    return fetch(API, {
-      method: 'POST',
-      body: JSON.stringify({ action: action, payload: payload })
-    }).then(function(r) { return r.json(); });
+    url += '&payload=' + encodeURIComponent(JSON.stringify(payload));
   }
-  return fetch(API + '?action=' + action)
+  return fetch(url)
     .then(function(r) { return r.json(); });
 }
 
@@ -51,66 +50,81 @@ function openScanner(targetInputId) {
     'Scanning: ' + (labelMap[labelKey] || targetInputId);
   document.getElementById('scannerStatus').textContent = 'Starting camera…';
   document.getElementById('scannerStatus').className = 'scanner-status';
+
+  // Stop any existing scanner first
+  if (_scannerRunning) {
+    try { Quagga.stop(); } catch(e) {}
+    try { Quagga.offDetected(); } catch(e) {}
+    _scannerRunning = false;
+  }
+
+  // Show overlay first, then init camera after DOM updates
   document.getElementById('scannerOverlay').classList.add('active');
 
-  Quagga.init({
-    inputStream: {
-      name: 'Live',
-      type: 'LiveStream',
-      target: document.getElementById('scannerVideo'),
-      constraints: {
-        facingMode: 'environment',
-        width:  { ideal: 1280 },
-        height: { ideal: 720 }
+  setTimeout(function() {
+    var video = document.getElementById('scannerVideo');
+
+    Quagga.init({
+      inputStream: {
+        name: 'Live',
+        type: 'LiveStream',
+        target: video,
+        constraints: {
+          facingMode: 'environment',
+          width:  { min: 640, ideal: 1280 },
+          height: { min: 480, ideal: 720 }
+        }
+      },
+      decoder: {
+        readers: [
+          'code_128_reader',
+          'ean_reader',
+          'ean_8_reader',
+          'code_39_reader',
+          'upc_reader',
+          'upc_e_reader',
+          'i2of5_reader'
+        ]
+      },
+      locate: true,
+      numOfWorkers: 2,
+      frequency: 10
+    }, function(err) {
+      if (err) {
+        document.getElementById('scannerStatus').textContent = 'Camera error: ' + err.message;
+        document.getElementById('scannerStatus').className = 'scanner-status error';
+        return;
       }
-    },
-    decoder: {
-      readers: [
-        'code_128_reader',
-        'ean_reader',
-        'ean_8_reader',
-        'code_39_reader',
-        'upc_reader',
-        'upc_e_reader',
-        'i2of5_reader'
-      ]
-    },
-    locate: true
-  }, function(err) {
-    if (err) {
-      document.getElementById('scannerStatus').textContent = 'Camera error: ' + err.message;
-      document.getElementById('scannerStatus').className = 'scanner-status error';
-      return;
-    }
-    Quagga.start();
-    _scannerRunning = true;
-    document.getElementById('scannerStatus').textContent = 'Point camera at barcode…';
-  });
+      Quagga.start();
+      _scannerRunning = true;
+      document.getElementById('scannerStatus').textContent = 'Point camera at barcode…';
+    });
 
-  Quagga.onDetected(function(result) {
-    var code = result.codeResult.code;
-    if (!code) return;
+    Quagga.onDetected(function(result) {
+      var code = result.codeResult.code;
+      if (!code) return;
 
-    document.getElementById('scannerStatus').textContent = 'Got it: ' + code;
-    document.getElementById('scannerStatus').className = 'scanner-status success';
+      document.getElementById('scannerStatus').textContent = 'Got it: ' + code;
+      document.getElementById('scannerStatus').className = 'scanner-status success';
 
-    var input = document.getElementById(_scanTargetId);
-    if (input) {
-      input.value = code;
-      input.dispatchEvent(new Event('input'));
-    }
+      var input = document.getElementById(_scanTargetId);
+      if (input) {
+        input.value = code;
+        input.dispatchEvent(new Event('input'));
+      }
 
-    showToast('Scanned: ' + code, 'success');
-    setTimeout(closeScanner, 800);
-  });
+      showToast('Scanned: ' + code, 'success');
+      setTimeout(closeScanner, 800);
+    });
+  }, 300);
 }
 
 function closeScanner() {
   if (_scannerRunning) {
-    Quagga.stop();
+    try { Quagga.stop(); } catch(e) {}
     _scannerRunning = false;
   }
-  Quagga.offDetected();
+  try { Quagga.offDetected(); } catch(e) {}
   document.getElementById('scannerOverlay').classList.remove('active');
   _scanTargetId = null;
 }
@@ -122,10 +136,13 @@ function loadOrders() {
     '<div class="empty-state"><p>Loading...</p></div>';
   apiFetch('getScanOrders')
     .then(function(data) {
-      _scanData = data || [];
+      _scanData = Array.isArray(data) ? data : [];
       filterScanOrders();
     })
-    .catch(function() { showToast('Error loading orders', 'error'); });
+    .catch(function(err) {
+      console.error('getScanOrders error:', err);
+      showToast('Error loading orders', 'error');
+    });
 }
 
 function filterScanOrders() {
@@ -169,11 +186,14 @@ function loadOOR() {
   apiFetch('getOOROrders')
     .then(function(data) {
       if (data && data.error) { showToast('Error: ' + data.error, 'error'); return; }
-      _oorData = data || [];
+      _oorData = Array.isArray(data) ? data : [];
       buildLocationChips();
       renderOOR();
     })
-    .catch(function() { showToast('Error loading OOR orders', 'error'); });
+    .catch(function(err) {
+      console.error('getOOROrders error:', err);
+      showToast('Error loading OOR orders', 'error');
+    });
 }
 
 function buildLocationChips() {
@@ -267,7 +287,7 @@ function toggleOOR(idx) {
 // ── Package Orders ────────────────────────────────────────
 
 function loadPackage() { filterPackageOrders(); }
-function filterPackageOrders() { /* placeholder */ }
+function filterPackageOrders() {}
 
 // ── New order form ────────────────────────────────────────
 
@@ -371,7 +391,7 @@ function saveOrder() {
         showToast('Order ' + orderNum + ' saved', 'success');
         setTimeout(exitForm, 900);
       } else {
-        showToast('Error: ' + res.error, 'error');
+        showToast('Error: ' + (res.error || 'Unknown error'), 'error');
       }
     })
     .catch(function() {
