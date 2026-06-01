@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ArTek Scanner</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{
+      font-family:'Segoe UI',system-ui,sans-serif;
+      background:#0f172a;color:#fff;
+      min-height:100vh;display:flex;
+      flex-direction:column;align-items:center;
+      justify-content:center;padding:20px;
+    }
+    .header{text-align:center;margin-bottom:20px}
+    .header svg{margin-bottom:8px}
+    .header p{font-size:.82rem;color:#64748b}
+    .field-label{
+      font-size:.78rem;font-weight:600;color:#3b82f6;
+      text-transform:uppercase;letter-spacing:.5px;
+      margin-bottom:12px;text-align:center;
+    }
+    .video-wrap{
+      position:relative;width:100%;max-width:460px;
+      background:#000;border-radius:12px;overflow:hidden;
+    }
+    #video{width:100%;display:block;max-height:65vh;object-fit:cover}
+    canvas{display:none}
+    .reticle{
+      position:absolute;top:50%;left:50%;
+      transform:translate(-50%,-50%);
+      width:72%;height:28%;
+      border:2px solid #3b82f6;border-radius:6px;
+      box-shadow:0 0 0 2000px rgba(0,0,0,0.45);
+      pointer-events:none;
+    }
+    .reticle::before,.reticle::after{
+      content:'';position:absolute;
+      width:18px;height:18px;
+      border-color:#fff;border-style:solid;
+    }
+    .reticle::before{top:-2px;left:-2px;border-width:3px 0 0 3px}
+    .reticle::after{bottom:-2px;right:-2px;border-width:0 3px 3px 0}
+    .scan-line{
+      position:absolute;left:14%;width:72%;
+      height:2px;background:#3b82f6;opacity:.85;
+      animation:scanline 2s ease-in-out infinite;
+      pointer-events:none;
+    }
+    @keyframes scanline{
+      0%{top:38%}50%{top:62%}100%{top:38%}
+    }
+    .status{
+      margin-top:16px;font-size:.88rem;
+      color:#94a3b8;text-align:center;min-height:24px;
+    }
+    .status.success{color:#10b981;font-weight:600}
+    .status.error{color:#ef4444}
+    .result-box{
+      display:none;margin-top:14px;
+      background:#1e293b;border:1px solid #334155;
+      border-radius:8px;padding:14px 20px;
+      text-align:center;width:100%;max-width:460px;
+    }
+    .result-label{font-size:.72rem;color:#64748b;margin-bottom:4px}
+    .result-code{font-size:1.1rem;font-weight:700;color:#fff;word-break:break-all}
+    .btn-cancel{
+      margin-top:20px;height:44px;padding:0 32px;
+      border-radius:8px;border:1px solid rgba(255,255,255,0.2);
+      background:transparent;color:#94a3b8;
+      font-size:.9rem;cursor:pointer;
+      transition:background .15s,color .15s;
+    }
+    .btn-cancel:hover{background:rgba(255,255,255,0.08);color:#fff}
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <svg viewBox="0 0 400 140" xmlns="http://www.w3.org/2000/svg" height="36">
+      <defs>
+        <linearGradient id="mg" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%"   stop-color="#ffffff"/>
+          <stop offset="25%"  stop-color="#d8d8d8"/>
+          <stop offset="50%"  stop-color="#b0b0b0"/>
+          <stop offset="75%"  stop-color="#c8c8c8"/>
+          <stop offset="100%" stop-color="#e8e8e8"/>
+        </linearGradient>
+      </defs>
+      <g transform="skewX(-8) translate(30,5)">
+        <text x="0" y="105" font-family="'Arial Black','Impact',sans-serif"
+          font-size="108" font-weight="900" letter-spacing="-2"
+          fill="none" stroke="#111" stroke-width="14"
+          stroke-linejoin="round" paint-order="stroke">ArTek</text>
+        <text x="2" y="107" font-family="'Arial Black','Impact',sans-serif"
+          font-size="108" font-weight="900" letter-spacing="-2"
+          fill="#555" opacity="0.4">ArTek</text>
+        <text x="0" y="105" font-family="'Arial Black','Impact',sans-serif"
+          font-size="108" font-weight="900" letter-spacing="-2"
+          fill="url(#mg)" stroke="#222" stroke-width="3"
+          stroke-linejoin="round" paint-order="stroke">ArTek</text>
+      </g>
+    </svg>
+    <p>Barcode Scanner</p>
+  </div>
+
+  <p class="field-label" id="fieldLabel">Loading…</p>
+
+  <div class="video-wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div class="reticle"></div>
+    <div class="scan-line"></div>
+  </div>
+
+  <p class="status" id="status">Starting camera…</p>
+
+  <div class="result-box" id="resultBox">
+    <div class="result-label">Scanned</div>
+    <div class="result-code" id="resultCode"></div>
+  </div>
+
+  <button class="btn-cancel" onclick="cancelScan()">Cancel</button>
+
+  <script>
+    var params  = new URLSearchParams(window.location.search);
+    var fieldId = params.get('field') || '';
+    var returnUrl = params.get('return') || '';
+
+    var labelMap = {
+      'orderNumber': 'Order number',
+      'pn':          'Part number',
+      'lot':         'Lot number'
+    };
+    var labelKey = fieldId.startsWith('pn-')  ? 'pn'  :
+                   fieldId.startsWith('lot-') ? 'lot' : fieldId;
+    document.getElementById('fieldLabel').textContent =
+      'Scanning: ' + (labelMap[labelKey] || fieldId);
+
+    var detected = false;
+
+    Quagga.init({
+      inputStream: {
+        name: 'Live',
+        type: 'LiveStream',
+        target: document.getElementById('video'),
+        constraints: {
+          facingMode: 'environment',
+          width:  { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      },
+      decoder: {
+        readers: [
+          'code_128_reader',
+          'ean_reader',
+          'ean_8_reader',
+          'code_39_reader',
+          'upc_reader',
+          'upc_e_reader',
+          'i2of5_reader'
+        ]
+      },
+      locate: true
+    }, function(err) {
+      if (err) {
+        document.getElementById('status').textContent = 'Camera error: ' + err.message;
+        document.getElementById('status').className = 'status error';
+        return;
+      }
+      Quagga.start();
+      document.getElementById('status').textContent = 'Point camera at barcode…';
+    });
+
+    Quagga.onDetected(function(result) {
+      if (detected) return;
+      detected = true;
+      var code = result.codeResult.code;
+      Quagga.stop();
+
+      document.getElementById('status').textContent = 'Got it!';
+      document.getElementById('status').className = 'status success';
+      document.getElementById('resultCode').textContent = code;
+      document.getElementById('resultBox').style.display = 'block';
+
+      // Navigate back to the WMS with the result in the URL
+      if (returnUrl) {
+        setTimeout(function() {
+          window.location.href = returnUrl +
+            '&scanResult=' + encodeURIComponent(code) +
+            '&scanField='  + encodeURIComponent(fieldId);
+        }, 1000);
+      }
+    });
+
+    function cancelScan() {
+      Quagga.stop();
+      if (returnUrl) {
+        window.location.href = returnUrl;
+      } else {
+        history.back();
+      }
+    }
+  </script>
+
+</body>
+</html>
