@@ -1,1 +1,1 @@
-# artek-scanner
+# artek
