@@ -1,5 +1,5 @@
 // ── Config ────────────────────────────────────────────────
-var API = 'YOUR_APPS_SCRIPT_URL';
+var API = 'https://script.google.com/macros/s/AKfycbxR-rqmbCxk2Gg15i9tVq69L9Fgx5Swq237t3ok_7xbS1AHEQeeH96rz6jvPnmvUr4g/exec';
 
 var partCount = 0;
 var _oorData  = [];
@@ -125,7 +125,7 @@ function loadOrders() {
       _scanData = data || [];
       filterScanOrders();
     })
-    .catch(function(err) { showToast('Error loading orders', 'error'); });
+    .catch(function() { showToast('Error loading orders', 'error'); });
 }
 
 function filterScanOrders() {
@@ -374,7 +374,7 @@ function saveOrder() {
         showToast('Error: ' + res.error, 'error');
       }
     })
-    .catch(function(err) {
+    .catch(function() {
       saveBtn.disabled = false;
       saveBtn.textContent = 'Save order';
       showToast('Error saving order', 'error');
