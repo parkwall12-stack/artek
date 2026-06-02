@@ -8,6 +8,7 @@ var _activeLocation = 'all';
 var _activeShip     = 'all';
 var _scanTargetId   = null;
 var _codeReader     = null;
+var _oorItemCache   = {}; // cache fetched items so we don't re-fetch
 
 // ── JSONP ─────────────────────────────────────────────────
 
@@ -64,7 +65,6 @@ function openScanner(targetInputId) {
   document.getElementById('scannerStatus').className = 'scanner-status';
   document.getElementById('scannerOverlay').classList.add('active');
 
-  // Stop any existing reader
   if (_codeReader) {
     try { _codeReader.reset(); } catch(e) {}
     _codeReader = null;
@@ -73,33 +73,27 @@ function openScanner(targetInputId) {
   setTimeout(function() {
     try {
       _codeReader = new ZXing.BrowserMultiFormatReader();
-
       _codeReader.decodeFromConstraints(
         { video: { facingMode: { ideal: 'environment' } } },
         document.getElementById('scannerVideo'),
         function(result, err) {
           if (result) {
             var code = result.getText();
-
             document.getElementById('scannerStatus').textContent = 'Got it: ' + code;
             document.getElementById('scannerStatus').className = 'scanner-status success';
-
             var input = document.getElementById(_scanTargetId);
             if (input) {
               input.value = code;
               input.dispatchEvent(new Event('input'));
             }
-
             showToast('Scanned: ' + code, 'success');
             setTimeout(closeScanner, 800);
           }
-          // ZXing throws NotFoundException continuously when no barcode — ignore those
           if (err && !(err instanceof ZXing.NotFoundException)) {
             console.warn('Scanner error:', err);
           }
         }
       );
-
       document.getElementById('scannerStatus').textContent = 'Point camera at barcode…';
     } catch(e) {
       document.getElementById('scannerStatus').textContent = 'Camera error: ' + e.message;
@@ -162,9 +156,10 @@ function renderOrders(orders) {
 // ── OOR ───────────────────────────────────────────────────
 
 function loadOOR() {
+  _oorItemCache = {}; // clear cache on fresh load
   document.getElementById('oorList').innerHTML =
     '<div class="empty-state"><p>Loading...</p></div>';
-  apiFetch('getOOROrders')
+  apiFetch('getOOROrderHeaders')
     .then(function(data) {
       if (data && data.error) { showToast('Error: ' + data.error, 'error'); return; }
       _oorData = Array.isArray(data) ? data : [];
@@ -200,6 +195,7 @@ function setShipFilter(type) {
 function renderOOR() {
   var q = document.getElementById('oorSearch')
     ? document.getElementById('oorSearch').value.toLowerCase().trim() : '';
+
   var filtered = _oorData.filter(function(o) {
     var locMatch    = _activeLocation === 'all' || o.location === _activeLocation;
     var shipMatch   = _activeShip === 'all' ||
@@ -222,35 +218,72 @@ function renderOOR() {
     var pd        = o.promiseDate ? new Date(o.promiseDate).toLocaleDateString('en-US', { month:'short', day:'numeric' }) : '—';
     var shipBadge = o.isPrepaid ? '<span class="badge badge-prepaid">Prepaid</span>' : '<span class="badge badge-collect">Collect</span>';
     var locBadge  = '<span class="badge badge-loc">' + (o.location || '—') + '</span>';
-    var itemCount = o.items ? o.items.length : 0;
-    var items = (o.items || []).map(function(item) {
-      return '<div class="oor-item">' +
-        '<div style="flex:1;min-width:0">' +
-          '<div class="oor-item-code">' + (item.itemCode || '—') + '</div>' +
-          '<div class="oor-item-desc">' + (item.description || '') + '</div>' +
-        '</div>' +
-        '<div class="oor-item-qty">' + (item.qtyOrdered || 0) + ' ' + (item.uom || '') + '</div>' +
-      '</div>';
-    }).join('');
 
-    return '<div class="oor-card" id="oor-' + idx + '">' +
-      '<div class="oor-card-header" onclick="toggleOOR(' + idx + ')">' +
+    return '<div class="oor-card" id="oor-' + idx + '" data-orderno="' + o.orderNo + '">' +
+      '<div class="oor-card-header" onclick="toggleOOR(' + idx + ', \'' + o.orderNo + '\')">' +
         '<div class="oor-order-icon">📦</div>' +
         '<div class="oor-order-info">' +
           '<div class="oor-order-num">Order #' + o.orderNo + '</div>' +
-          '<div class="oor-order-meta">Promise: ' + pd + ' &nbsp;·&nbsp; ' + itemCount + ' item' + (itemCount !== 1 ? 's' : '') + ' &nbsp;·&nbsp; PO: ' + (o.po || '—') + '</div>' +
+          '<div class="oor-order-meta">Promise: ' + pd + ' &nbsp;·&nbsp; ' + o.itemCount + ' item' + (o.itemCount !== 1 ? 's' : '') + ' &nbsp;·&nbsp; PO: ' + (o.po || '—') + '</div>' +
         '</div>' +
         '<div class="oor-badges">' + locBadge + shipBadge + '</div>' +
         '<span class="oor-chevron">▶</span>' +
       '</div>' +
-      '<div class="oor-items">' + items + '</div>' +
+      '<div class="oor-items" id="oor-items-' + idx + '">' +
+        '<div class="oor-item-loading">Loading items…</div>' +
+      '</div>' +
     '</div>';
   }).join('');
 }
 
-function toggleOOR(idx) {
-  var card = document.getElementById('oor-' + idx);
-  if (card) card.classList.toggle('open');
+function toggleOOR(idx, orderNo) {
+  var card      = document.getElementById('oor-' + idx);
+  var itemsDiv  = document.getElementById('oor-items-' + idx);
+  if (!card) return;
+
+  var isOpen = card.classList.contains('open');
+
+  if (isOpen) {
+    card.classList.remove('open');
+    return;
+  }
+
+  // Opening — check cache first
+  card.classList.add('open');
+
+  if (_oorItemCache[orderNo]) {
+    renderOORItems(itemsDiv, _oorItemCache[orderNo]);
+    return;
+  }
+
+  // Not cached — fetch now
+  itemsDiv.innerHTML = '<div class="oor-item-loading">Loading items…</div>';
+
+  apiFetch('getOOROrderItems', { orderNo: String(orderNo) })
+    .then(function(items) {
+      if (!Array.isArray(items)) items = [];
+      _oorItemCache[orderNo] = items;
+      renderOORItems(itemsDiv, items);
+    })
+    .catch(function() {
+      itemsDiv.innerHTML = '<div class="oor-item-loading">Error loading items.</div>';
+    });
+}
+
+function renderOORItems(container, items) {
+  if (!items.length) {
+    container.innerHTML = '<div class="oor-item-loading">No items found.</div>';
+    return;
+  }
+  container.innerHTML = items.map(function(item) {
+    return '<div class="oor-item">' +
+      '<div style="flex:1;min-width:0">' +
+        '<div class="oor-item-code">' + (item.itemCode || '—') + '</div>' +
+        '<div class="oor-item-desc">' + (item.description || '') + '</div>' +
+      '</div>' +
+      '<div class="oor-item-qty">' + (item.qtyOrdered || 0) + ' ' + (item.uom || '') + '</div>' +
+    '</div>';
+  }).join('');
 }
 
 // ── Package Orders ────────────────────────────────────────
