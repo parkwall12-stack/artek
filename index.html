@@ -131,7 +131,8 @@
   <!-- SCANNER MODAL -->
   <div class="scanner-overlay" id="scannerOverlay">
     <p class="scanner-field-label" id="scannerFieldLabel">Scanning…</p>
-    <div class="scanner-wrap" id="scannerWrap">
+    <div class="scanner-wrap">
+      <video id="scannerVideo" autoplay playsinline muted></video>
       <div class="scanner-reticle"></div>
       <div class="scanner-line"></div>
     </div>
@@ -141,7 +142,7 @@
 
   <div class="toast" id="toast"></div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
+  <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
