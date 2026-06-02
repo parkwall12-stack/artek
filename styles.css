@@ -302,23 +302,17 @@ body {
 .scanner-wrap {
   position: relative;
   width: 100%; max-width: 480px;
-  min-height: 280px;
   background: #000; border-radius: 12px;
   overflow: hidden;
 }
 .scanner-wrap video {
-  width: 100% !important;
-  height: auto !important;
-  display: block !important;
+  width: 100%;
+  height: auto;
+  display: block;
   max-height: 60vh;
   object-fit: cover;
 }
-.scanner-wrap canvas {
-  position: absolute !important;
-  top: 0 !important; left: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-}
+.scanner-wrap canvas { display: none; }
 .scanner-reticle {
   position: absolute; top: 50%; left: 50%;
   transform: translate(-50%, -50%);
