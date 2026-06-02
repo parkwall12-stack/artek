@@ -219,7 +219,7 @@ function loadOOR() {
 }
 
 function buildLocationChips() {
-  var fixed = ['MCMAUR', 'MCMATL', 'MCMELM', 'MCMROB', 'MCMSSAN'];
+  var fixed = ['MCMAUR', 'MCMATL', 'MCMELM', 'MCMROB', 'MCMSAN', 'MCMFWO'];
   var locs  = ['all'].concat(fixed);
   var html = locs.map(function(loc) {
     var label  = loc === 'all' ? 'All' : loc;
