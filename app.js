@@ -1,35 +1,29 @@
 // ── Config ────────────────────────────────────────────────
 var API = 'https://script.google.com/macros/s/AKfycbzAtTHWoapyH00uvH2eqz55u__9XSnA-oibjgX5BIEDbR01iffHxWeIFsH3IOBGpMbD/exec';
 
-var partCount = 0;
-var _oorData  = [];
-var _scanData = [];
+var partCount       = 0;
+var _oorData        = [];
+var _scanData       = [];
 var _activeLocation = 'all';
 var _activeShip     = 'all';
 var _scanTargetId   = null;
-var _scannerRunning = false;
+var _codeReader     = null;
 
-// ── JSONP — bypasses CORS for Apps Script ─────────────────
+// ── JSONP ─────────────────────────────────────────────────
 
 function apiFetch(action, payload) {
   return new Promise(function(resolve, reject) {
     var cbName = 'cb_' + Math.random().toString(36).substr(2, 9);
     var script = document.createElement('script');
-
     var url = API + '?action=' + encodeURIComponent(action) + '&callback=' + cbName;
-    if (payload) {
-      url += '&payload=' + encodeURIComponent(JSON.stringify(payload));
-    }
+    if (payload) url += '&payload=' + encodeURIComponent(JSON.stringify(payload));
 
     var timeout = setTimeout(function() {
       cleanup();
       reject(new Error('Request timed out'));
     }, 15000);
 
-    window[cbName] = function(data) {
-      cleanup();
-      resolve(data);
-    };
+    window[cbName] = function(data) { cleanup(); resolve(data); };
 
     function cleanup() {
       clearTimeout(timeout);
@@ -37,11 +31,7 @@ function apiFetch(action, payload) {
       if (script.parentNode) script.parentNode.removeChild(script);
     }
 
-    script.onerror = function() {
-      cleanup();
-      reject(new Error('Script load error'));
-    };
-
+    script.onerror = function() { cleanup(); reject(new Error('Script load error')); };
     script.src = url;
     document.head.appendChild(script);
   });
@@ -59,101 +49,70 @@ function switchTab(tab) {
   if (tab === 'package') loadPackage();
 }
 
-// ── Scanner ───────────────────────────────────────────────
+// ── Scanner (ZXing) ───────────────────────────────────────
 
 function openScanner(targetInputId) {
   _scanTargetId = targetInputId;
 
-  var labelMap = {
-    'orderNumber': 'Order number',
-    'pn':  'Part number',
-    'lot': 'Lot number'
-  };
-  var labelKey = targetInputId.startsWith('pn-')  ? 'pn'  :
-                 targetInputId.startsWith('lot-') ? 'lot' : targetInputId;
+  var labelMap = { 'orderNumber': 'Order number', 'pn': 'Part number', 'lot': 'Lot number' };
+  var labelKey  = targetInputId.startsWith('pn-')  ? 'pn'  :
+                  targetInputId.startsWith('lot-') ? 'lot' : targetInputId;
 
   document.getElementById('scannerFieldLabel').textContent =
     'Scanning: ' + (labelMap[labelKey] || targetInputId);
   document.getElementById('scannerStatus').textContent = 'Starting camera…';
   document.getElementById('scannerStatus').className = 'scanner-status';
-
-  if (_scannerRunning) {
-    try { Quagga.stop(); } catch(e) {}
-    try { Quagga.offDetected(); } catch(e) {}
-    _scannerRunning = false;
-  }
-
-  // Clear any existing Quagga elements
-  var wrap = document.getElementById('scannerWrap');
-  var oldVideo = wrap.querySelector('video');
-  var oldCanvases = wrap.querySelectorAll('canvas');
-  if (oldVideo) oldVideo.remove();
-  oldCanvases.forEach(function(c) { c.remove(); });
-
   document.getElementById('scannerOverlay').classList.add('active');
 
+  // Stop any existing reader
+  if (_codeReader) {
+    try { _codeReader.reset(); } catch(e) {}
+    _codeReader = null;
+  }
+
   setTimeout(function() {
-    Quagga.init({
-      inputStream: {
-        name: 'Live',
-        type: 'LiveStream',
-        target: document.getElementById('scannerWrap'),
-        constraints: {
-          facingMode: 'environment',
-          width:  { min: 640, ideal: 1280 },
-          height: { min: 480, ideal: 720 }
+    try {
+      _codeReader = new ZXing.BrowserMultiFormatReader();
+
+      _codeReader.decodeFromConstraints(
+        { video: { facingMode: { ideal: 'environment' } } },
+        document.getElementById('scannerVideo'),
+        function(result, err) {
+          if (result) {
+            var code = result.getText();
+
+            document.getElementById('scannerStatus').textContent = 'Got it: ' + code;
+            document.getElementById('scannerStatus').className = 'scanner-status success';
+
+            var input = document.getElementById(_scanTargetId);
+            if (input) {
+              input.value = code;
+              input.dispatchEvent(new Event('input'));
+            }
+
+            showToast('Scanned: ' + code, 'success');
+            setTimeout(closeScanner, 800);
+          }
+          // ZXing throws NotFoundException continuously when no barcode — ignore those
+          if (err && !(err instanceof ZXing.NotFoundException)) {
+            console.warn('Scanner error:', err);
+          }
         }
-      },
-      decoder: {
-        readers: [
-          'code_128_reader',
-          'ean_reader',
-          'ean_8_reader',
-          'code_39_reader',
-          'upc_reader',
-          'upc_e_reader',
-          'i2of5_reader'
-        ]
-      },
-      locate: true,
-      numOfWorkers: 2,
-      frequency: 10
-    }, function(err) {
-      if (err) {
-        document.getElementById('scannerStatus').textContent = 'Camera error: ' + err.message;
-        document.getElementById('scannerStatus').className = 'scanner-status error';
-        return;
-      }
-      Quagga.start();
-      _scannerRunning = true;
+      );
+
       document.getElementById('scannerStatus').textContent = 'Point camera at barcode…';
-    });
-
-    Quagga.onDetected(function(result) {
-      var code = result.codeResult.code;
-      if (!code) return;
-
-      document.getElementById('scannerStatus').textContent = 'Got it: ' + code;
-      document.getElementById('scannerStatus').className = 'scanner-status success';
-
-      var input = document.getElementById(_scanTargetId);
-      if (input) {
-        input.value = code;
-        input.dispatchEvent(new Event('input'));
-      }
-
-      showToast('Scanned: ' + code, 'success');
-      setTimeout(closeScanner, 800);
-    });
-  }, 400);
+    } catch(e) {
+      document.getElementById('scannerStatus').textContent = 'Camera error: ' + e.message;
+      document.getElementById('scannerStatus').className = 'scanner-status error';
+    }
+  }, 300);
 }
 
 function closeScanner() {
-  if (_scannerRunning) {
-    try { Quagga.stop(); } catch(e) {}
-    _scannerRunning = false;
+  if (_codeReader) {
+    try { _codeReader.reset(); } catch(e) {}
+    _codeReader = null;
   }
-  try { Quagga.offDetected(); } catch(e) {}
   document.getElementById('scannerOverlay').classList.remove('active');
   _scanTargetId = null;
 }
@@ -168,10 +127,7 @@ function loadOrders() {
       _scanData = Array.isArray(data) ? data : [];
       filterScanOrders();
     })
-    .catch(function(err) {
-      console.error('getScanOrders error:', err);
-      showToast('Error loading orders', 'error');
-    });
+    .catch(function() { showToast('Error loading orders', 'error'); });
 }
 
 function filterScanOrders() {
@@ -186,15 +142,11 @@ function filterScanOrders() {
 function renderOrders(orders) {
   var list = document.getElementById('orderList');
   if (!orders || !orders.length) {
-    list.innerHTML =
-      '<div class="empty-state"><div class="empty-icon">📋</div>' +
-      '<p>No orders found.</p></div>';
+    list.innerHTML = '<div class="empty-state"><div class="empty-icon">📋</div><p>No orders found.</p></div>';
     return;
   }
   list.innerHTML = orders.map(function(o) {
-    var date = o.timestamp
-      ? new Date(o.timestamp).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })
-      : '—';
+    var date  = o.timestamp ? new Date(o.timestamp).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '—';
     var count = o.parts ? o.parts.length : 0;
     return '<div class="order-card">' +
       '<div class="order-icon">📋</div>' +
@@ -219,19 +171,15 @@ function loadOOR() {
       buildLocationChips();
       renderOOR();
     })
-    .catch(function(err) {
-      console.error('getOOROrders error:', err);
-      showToast('Error loading OOR orders', 'error');
-    });
+    .catch(function() { showToast('Error loading OOR orders', 'error'); });
 }
 
 function buildLocationChips() {
   var fixed = ['MCMAUR', 'MCMATL', 'MCMELM', 'MCMROB', 'MCMSAN', 'MCMFWO'];
   var locs  = ['all'].concat(fixed);
-  var html = locs.map(function(loc) {
-    var label  = loc === 'all' ? 'All' : loc;
+  var html  = locs.map(function(loc) {
     var active = loc === _activeLocation ? ' active' : '';
-    return '<button class="chip' + active + '" onclick="setLocFilter(\'' + loc + '\')">' + label + '</button>';
+    return '<button class="chip' + active + '" onclick="setLocFilter(\'' + loc + '\')">' + (loc === 'all' ? 'All' : loc) + '</button>';
   }).join('');
   document.getElementById('locationChips').innerHTML = html;
 }
@@ -244,9 +192,7 @@ function setLocFilter(loc) {
 
 function setShipFilter(type) {
   _activeShip = type;
-  document.querySelectorAll('#chip-all, #chip-collect, #chip-prepaid').forEach(function(c) {
-    c.classList.remove('active');
-  });
+  document.querySelectorAll('#chip-all, #chip-collect, #chip-prepaid').forEach(function(c) { c.classList.remove('active'); });
   document.getElementById('chip-' + type).classList.add('active');
   renderOOR();
 }
@@ -268,19 +214,13 @@ function renderOOR() {
   var list = document.getElementById('oorList');
   if (!filtered.length) {
     var locLabel = _activeLocation === 'all' ? '' : ' for ' + _activeLocation;
-    list.innerHTML =
-      '<div class="empty-state"><div class="empty-icon">📦</div>' +
-      '<p>No current orders' + locLabel + '.</p></div>';
+    list.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><p>No current orders' + locLabel + '.</p></div>';
     return;
   }
 
   list.innerHTML = filtered.map(function(o, idx) {
-    var pd = o.promiseDate
-      ? new Date(o.promiseDate).toLocaleDateString('en-US', { month:'short', day:'numeric' })
-      : '—';
-    var shipBadge = o.isPrepaid
-      ? '<span class="badge badge-prepaid">Prepaid</span>'
-      : '<span class="badge badge-collect">Collect</span>';
+    var pd        = o.promiseDate ? new Date(o.promiseDate).toLocaleDateString('en-US', { month:'short', day:'numeric' }) : '—';
+    var shipBadge = o.isPrepaid ? '<span class="badge badge-prepaid">Prepaid</span>' : '<span class="badge badge-collect">Collect</span>';
     var locBadge  = '<span class="badge badge-loc">' + (o.location || '—') + '</span>';
     var itemCount = o.items ? o.items.length : 0;
     var items = (o.items || []).map(function(item) {
@@ -341,16 +281,14 @@ function exitForm() {
 
 function addPart() {
   partCount++;
-  var id = partCount;
+  var id   = partCount;
   var card = document.createElement('div');
   card.className = 'part-card';
   card.id = 'part-' + id;
   card.innerHTML =
     '<div class="part-card-header">' +
       '<span class="part-badge">Part ' + id + '</span>' +
-      (id > 1
-        ? '<button class="remove-btn" onclick="removePart(' + id + ')" aria-label="Remove part ' + id + '">✕</button>'
-        : '<span></span>') +
+      (id > 1 ? '<button class="remove-btn" onclick="removePart(' + id + ')" aria-label="Remove part ' + id + '">✕</button>' : '<span></span>') +
     '</div>' +
     '<div class="part-field"><label for="pn-' + id + '">Part number</label>' +
       '<div class="input-scan">' +
