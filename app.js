@@ -83,6 +83,13 @@ function openScanner(targetInputId) {
     _scannerRunning = false;
   }
 
+  // Clear any existing Quagga elements
+  var wrap = document.getElementById('scannerWrap');
+  var oldVideo = wrap.querySelector('video');
+  var oldCanvases = wrap.querySelectorAll('canvas');
+  if (oldVideo) oldVideo.remove();
+  oldCanvases.forEach(function(c) { c.remove(); });
+
   document.getElementById('scannerOverlay').classList.add('active');
 
   setTimeout(function() {
@@ -90,7 +97,7 @@ function openScanner(targetInputId) {
       inputStream: {
         name: 'Live',
         type: 'LiveStream',
-        target: document.getElementById('scannerVideo'),
+        target: document.getElementById('scannerWrap'),
         constraints: {
           facingMode: 'environment',
           width:  { min: 640, ideal: 1280 },
