@@ -302,25 +302,23 @@ body {
 .scanner-wrap {
   position: relative;
   width: 100%; max-width: 480px;
+  min-height: 280px;
   background: #000; border-radius: 12px;
   overflow: hidden;
 }
 .scanner-wrap video {
-  width: 100%; display: block;
-  max-height: 60vh; object-fit: cover;
+  width: 100% !important;
+  height: auto !important;
+  display: block !important;
+  max-height: 60vh;
+  object-fit: cover;
 }
-
-/* Only hide OUR canvas — let Quagga's canvas show */
-#scannerCanvas { display: none; }
-
-/* Quagga's auto-generated canvas */
 .scanner-wrap canvas {
-  position: absolute;
-  top: 0; left: 0;
+  position: absolute !important;
+  top: 0 !important; left: 0 !important;
   width: 100% !important;
   height: 100% !important;
 }
-
 .scanner-reticle {
   position: absolute; top: 50%; left: 50%;
   transform: translate(-50%, -50%);
@@ -371,6 +369,7 @@ body {
   transition: background .15s;
 }
 .scanner-close:hover { background: rgba(255,255,255,0.1); }
+
 /* ── Toast ───────────────────────────────────── */
 .toast {
   position: fixed; bottom: 24px; left: 50%;
