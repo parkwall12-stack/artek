@@ -309,15 +309,27 @@ body {
   width: 100%; display: block;
   max-height: 60vh; object-fit: cover;
 }
-.scanner-wrap canvas { display: none; }
+
+/* Only hide OUR canvas — let Quagga's canvas show */
+#scannerCanvas { display: none; }
+
+/* Quagga's auto-generated canvas */
+.scanner-wrap canvas {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100% !important;
+  height: 100% !important;
+}
+
 .scanner-reticle {
   position: absolute; top: 50%; left: 50%;
   transform: translate(-50%, -50%);
   width: 70%; height: 30%;
-  border: 2px solid var(--accent);
+  border: 2px solid #3b82f6;
   border-radius: 6px;
   box-shadow: 0 0 0 2000px rgba(0,0,0,0.4);
   pointer-events: none;
+  z-index: 10;
 }
 .scanner-reticle::before, .scanner-reticle::after {
   content: ''; position: absolute;
@@ -328,10 +340,11 @@ body {
 .scanner-reticle::after  { bottom:-2px; right:-2px; border-width: 0 3px 3px 0; }
 .scanner-line {
   position: absolute; left: 15%; width: 70%;
-  height: 2px; background: var(--accent);
+  height: 2px; background: #3b82f6;
   opacity: 0.8;
   animation: scanline 2s ease-in-out infinite;
   pointer-events: none;
+  z-index: 10;
 }
 @keyframes scanline {
   0%   { top: 35%; }
@@ -339,7 +352,7 @@ body {
   100% { top: 35%; }
 }
 .scanner-field-label {
-  color: var(--accent); font-size: .78rem; font-weight: 600;
+  color: #3b82f6; font-size: .78rem; font-weight: 600;
   text-transform: uppercase; letter-spacing: .5px;
   margin-bottom: 12px;
 }
@@ -351,14 +364,13 @@ body {
 .scanner-status.error   { color: #ef4444; }
 .scanner-close {
   margin-top: 16px; height: 44px; padding: 0 28px;
-  border-radius: var(--radius);
+  border-radius: 8px;
   border: 1px solid rgba(255,255,255,0.25);
   background: transparent; color: #fff;
   font-size: .9rem; cursor: pointer;
   transition: background .15s;
 }
 .scanner-close:hover { background: rgba(255,255,255,0.1); }
-
 /* ── Toast ───────────────────────────────────── */
 .toast {
   position: fixed; bottom: 24px; left: 50%;
