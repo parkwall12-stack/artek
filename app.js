@@ -23,10 +23,29 @@ function apiFetch(action, payload) {
   var url = API + '?action=' + encodeURIComponent(action);
   if (payload) url += '&payload=' + encodeURIComponent(JSON.stringify(payload));
 
-  return fetch(url, { redirect: 'follow' })
-    .then(function(r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
+  return fetch(url)
+    .then(function(r) { return r.json(); })
+    .catch(function() {
+      // Fallback to JSONP if fetch fails (Safari ITP, CORS redirect issues)
+      return new Promise(function(resolve, reject) {
+        var cbName = 'cb_' + Math.random().toString(36).substr(2, 9);
+        var script = document.createElement('script');
+        var u = API + '?action=' + encodeURIComponent(action) + '&callback=' + cbName;
+        if (payload) u += '&payload=' + encodeURIComponent(JSON.stringify(payload));
+
+        var timeout = setTimeout(function() { cleanup(); reject(new Error('Timeout')); }, 15000);
+        window[cbName] = function(data) { cleanup(); resolve(data); };
+
+        function cleanup() {
+          clearTimeout(timeout);
+          delete window[cbName];
+          if (script.parentNode) script.parentNode.removeChild(script);
+        }
+
+        script.onerror = function() { cleanup(); reject(new Error('Script error')); };
+        script.src = u;
+        document.head.appendChild(script);
+      });
     });
 }
 
