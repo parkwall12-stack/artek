@@ -14,7 +14,8 @@ var _codeReader      = null;
 var _oorItemCache    = {};
 var _currentPickData = null;
 var _currentPkgData  = null;
-var _pkgBoxes        = {};  // { itemIdx: [{qty, weight, photoUrl}] }
+var _pkgBoxes        = {};
+var _sessionPicks    = [];   // orders picked this session
 
 // ── JSONP ─────────────────────────────────────────────────
 
@@ -71,10 +72,17 @@ function playBadBeep() {
   } catch(e) {}
 }
 
-// ── Part code helper ──────────────────────────────────────
+// ── Code helpers ──────────────────────────────────────────
 
 function extractPartCode(itemCode) {
   return (itemCode || '').trim().split(/\s{2,}/)[0].trim();
+}
+
+function extractMiddleCode(code) {
+  // FBMCM-464VNL000-24  →  464VNL000
+  // FB-464VNL000-120    →  464VNL000
+  var parts = (code || '').trim().split('-');
+  return parts.length >= 2 ? parts[1].trim().toUpperCase() : (code || '').trim().toUpperCase();
 }
 
 // ── Tab routing ───────────────────────────────────────────
@@ -95,7 +103,9 @@ function openScanner(targetInputId) {
   _scanTargetId = targetInputId;
   _partScanIdx  = null;
   _partScanCode = null;
-  _startScanner('Scanning: ' + (targetInputId === 'orderNumber' ? 'Order number' : targetInputId.startsWith('pick-lot-') ? 'Lot number' : 'Part number'));
+  var label = targetInputId === 'orderNumber' ? 'Order number' :
+              targetInputId.startsWith('pick-lot-') ? 'Lot number' : 'Part number';
+  _startScanner('Scanning: ' + label);
 }
 
 function openPartScanner(idx, expectedCode) {
@@ -111,10 +121,7 @@ function _startScanner(label) {
   document.getElementById('scannerStatus').className = 'scanner-status';
   document.getElementById('scannerOverlay').classList.add('active');
 
-  if (_codeReader) {
-    try { _codeReader.reset(); } catch(e) {}
-    _codeReader = null;
-  }
+  if (_codeReader) { try { _codeReader.reset(); } catch(e) {} _codeReader = null; }
 
   setTimeout(function() {
     try {
@@ -129,10 +136,7 @@ function _startScanner(label) {
             document.getElementById('scannerStatus').className = 'scanner-status success';
 
             if (_partScanIdx !== null) {
-              setTimeout(function() {
-                closeScanner();
-                verifyPartScan(_partScanIdx, _partScanCode, code);
-              }, 500);
+              setTimeout(function() { closeScanner(); verifyPartScan(_partScanIdx, _partScanCode, code); }, 500);
             } else if (_scanTargetId) {
               var input = document.getElementById(_scanTargetId);
               if (input) { input.value = code; input.dispatchEvent(new Event('input')); }
@@ -163,9 +167,9 @@ function closeScanner() {
 // ── Part verification ─────────────────────────────────────
 
 function verifyPartScan(idx, expectedCode, scannedCode) {
-  var clean    = extractPartCode(expectedCode).toUpperCase();
-  var scanned  = scannedCode.trim().toUpperCase();
-  var isMatch  = clean === scanned;
+  var expectedMiddle = extractMiddleCode(expectedCode);
+  var scannedMiddle  = extractMiddleCode(scannedCode);
+  var isMatch        = expectedMiddle === scannedMiddle;
 
   var card     = document.getElementById('pick-card-' + idx);
   var input    = document.getElementById('pick-scan-' + idx);
@@ -176,13 +180,13 @@ function verifyPartScan(idx, expectedCode, scannedCode) {
   if (card)   { card.classList.remove('match','no-match'); card.classList.add(isMatch ? 'match' : 'no-match'); }
   if (status) {
     if (isMatch) {
-      status.textContent = '✓ Match — part verified';
+      status.textContent = '✓ Match — ' + expectedMiddle + ' verified';
       status.className = 'pick-status match';
       playGoodBeep();
       showToast('✓ Part matched!', 'success');
       if (qtyInput) setTimeout(function() { qtyInput.focus(); }, 100);
     } else {
-      status.textContent = '✗ No match — expected: ' + clean;
+      status.textContent = '✗ No match — expected: ' + expectedMiddle + ' · got: ' + scannedMiddle;
       status.className = 'pick-status no-match';
       playBadBeep();
       showToast('✗ Wrong part!', 'error');
@@ -212,11 +216,9 @@ function renderOrders(orders) {
   }
   list.innerHTML = orders.map(function(o) {
     var date  = o.timestamp ? new Date(o.timestamp).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '—';
-    var badge = o.status === 'Complete'
-      ? '<span class="badge badge-complete">Complete</span>'
-      : o.status === 'Packaging'
-      ? '<span class="badge badge-pending">Packaging</span>'
-      : '<span class="badge badge-ready">Picked</span>';
+    var badge = o.status === 'Complete'   ? '<span class="badge badge-complete">Complete</span>'  :
+                o.status === 'Packaging'  ? '<span class="badge badge-inprog">Packaging</span>'   :
+                '<span class="badge badge-ready">Picked</span>';
     return '<div class="order-card">' +
       '<div class="order-icon">📋</div>' +
       '<div class="order-info">' +
@@ -237,12 +239,38 @@ function showNewOrder() {
   document.getElementById('orderNumber').value = '';
   document.getElementById('lookupError').style.display  = 'none';
   _currentPickData = null;
+  renderSessionPicks();
   setTimeout(function() { document.getElementById('orderNumber').focus(); }, 100);
+}
+
+function renderSessionPicks() {
+  var wrap = document.getElementById('sessionPicksWrap');
+  var list = document.getElementById('sessionPicksList');
+  if (!_sessionPicks.length) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+  list.innerHTML = _sessionPicks.map(function(p) {
+    return '<div class="session-pick-card">' +
+      '<div class="session-pick-icon">✓</div>' +
+      '<div class="session-pick-info">' +
+        '<div class="session-pick-num">Order #' + p.orderNumber + '</div>' +
+        '<div class="session-pick-meta">' +
+          (p.location || '') +
+          (p.po ? ' &nbsp;·&nbsp; PO: ' + p.po : '') +
+          ' &nbsp;·&nbsp; ' + p.itemCount + ' item' + (p.itemCount !== 1 ? 's' : '') +
+        '</div>' +
+      '</div>' +
+      '<span class="badge badge-ok">Picked</span>' +
+    '</div>';
+  }).join('');
 }
 
 function lookupOrder() {
   var num = document.getElementById('orderNumber').value.trim();
-  if (!num) { document.getElementById('lookupError').textContent = 'Please enter an order number.'; document.getElementById('lookupError').style.display = 'block'; return; }
+  if (!num) {
+    document.getElementById('lookupError').textContent = 'Please enter an order number.';
+    document.getElementById('lookupError').style.display = 'block';
+    return;
+  }
   document.getElementById('lookupError').style.display = 'none';
   var btn = document.getElementById('lookupBtn');
   btn.disabled = true; btn.textContent = 'Looking up…';
@@ -250,13 +278,17 @@ function lookupOrder() {
   apiFetch('getFullOOROrder', { orderNo: num })
     .then(function(data) {
       btn.disabled = false; btn.textContent = 'Look up order';
-      if (data && data.error) { document.getElementById('lookupError').textContent = data.error; document.getElementById('lookupError').style.display = 'block'; return; }
+      if (data && data.error) {
+        document.getElementById('lookupError').textContent = data.error;
+        document.getElementById('lookupError').style.display = 'block';
+        return;
+      }
       _currentPickData = data;
       showPickPhase(data);
     })
     .catch(function() {
       btn.disabled = false; btn.textContent = 'Look up order';
-      document.getElementById('lookupError').textContent = 'Error looking up order.';
+      document.getElementById('lookupError').textContent = 'Error looking up order. Check connection.';
       document.getElementById('lookupError').style.display = 'block';
     });
 }
@@ -278,8 +310,8 @@ function showPickPhase(data) {
     '</div>';
 
   document.getElementById('pickItemsList').innerHTML = (data.items||[]).map(function(item, idx) {
-    var code = extractPartCode(item.itemCode);
-    var safeCode = code.replace(/'/g, "\\'");
+    var code     = extractPartCode(item.itemCode);
+    var safeCode = code.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     return '<div class="pick-item-card" id="pick-card-' + idx + '">' +
       '<div class="pick-item-top">' +
         '<div class="pick-item-code">' + code + '</div>' +
@@ -313,6 +345,8 @@ function backToLookup() {
   document.getElementById('phase-lookup').style.display = 'block';
   document.getElementById('phase-pick').style.display   = 'none';
   document.getElementById('lookupError').style.display  = 'none';
+  document.getElementById('orderNumber').value = '';
+  setTimeout(function() { document.getElementById('orderNumber').focus(); }, 100);
 }
 
 function savePick() {
@@ -323,15 +357,23 @@ function savePick() {
 
   var payload = {
     orderNumber: String(h.orderNo),
-    po:          h.po || '',
+    po:          h.po       || '',
     location:    h.location || '',
     items: items.map(function(item, idx) {
       var expectedCode = extractPartCode(item.itemCode);
       var scannedCode  = (document.getElementById('pick-scan-' + idx)||{}).value || '';
-      var lotNumber    = (document.getElementById('pick-lot-' + idx) ||{}).value || '';
+      var lotNumber    = (document.getElementById('pick-lot-'  + idx)||{}).value || '';
       var qtyPulled    = parseFloat((document.getElementById('pick-qty-' + idx)||{}).value || 0);
-      var match        = scannedCode.trim().toUpperCase() === expectedCode.toUpperCase();
-      return { expectedCode:expectedCode, description:item.description||'', uom:item.uom||'', lotNumber:lotNumber, scannedCode:scannedCode, qtyRequired:item.qtyOrdered, qtyPulled:qtyPulled, match:match };
+      var match        = extractMiddleCode(scannedCode) === extractMiddleCode(expectedCode);
+      return {
+        expectedCode: expectedCode,
+        description:  item.description || '',
+        uom:          item.uom || '',
+        lotNumber:    lotNumber,
+        qtyRequired:  item.qtyOrdered,
+        qtyPulled:    qtyPulled,
+        match:        match
+      };
     })
   };
 
@@ -340,17 +382,37 @@ function savePick() {
   apiFetch('saveScanOrder', payload)
     .then(function(res) {
       btn.disabled = false; btn.textContent = 'Save pick';
-      if (res.success) {
-        showToast('Pick saved — order #' + h.orderNo + ' ready to package', 'success');
-        setTimeout(exitForm, 900);
+      if (res && res.success) {
+        // Add to session picks
+        _sessionPicks.unshift({
+          orderNumber: String(h.orderNo),
+          po:          h.po       || '',
+          location:    h.location || '',
+          itemCount:   items.length
+        });
+
+        showToast('Order #' + h.orderNo + ' picked — ready to package', 'success');
+
+        // Go back to lookup with session list visible
+        document.getElementById('phase-pick').style.display   = 'none';
+        document.getElementById('phase-lookup').style.display = 'block';
+        document.getElementById('orderNumber').value = '';
+        document.getElementById('lookupError').style.display  = 'none';
+        _currentPickData = null;
+        renderSessionPicks();
+        setTimeout(function() { document.getElementById('orderNumber').focus(); }, 100);
       } else {
-        showToast('Error: ' + (res.error||'Unknown'), 'error');
+        showToast('Error: ' + ((res && res.error) || 'Unknown error'), 'error');
       }
     })
-    .catch(function() { btn.disabled = false; btn.textContent = 'Save pick'; showToast('Error saving', 'error'); });
+    .catch(function(err) {
+      btn.disabled = false; btn.textContent = 'Save pick';
+      showToast('Error: ' + (err.message || 'check connection'), 'error');
+    });
 }
 
 function exitForm() {
+  _sessionPicks = [];
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   document.getElementById('tab-scan').classList.add('active');
   document.getElementById('page-scan').classList.add('active');
@@ -399,7 +461,9 @@ function openPackageOrder(orderNo) {
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   document.getElementById('page-package-detail').classList.add('active');
   _pkgBoxes = {};
-  document.getElementById('pkgOrderHeader').innerHTML = '<div class="pick-order-header"><p style="color:#94a3b8">Loading…</p></div>';
+
+  document.getElementById('pkgOrderHeader').innerHTML =
+    '<div class="pick-order-header"><p style="color:#94a3b8">Loading…</p></div>';
   document.getElementById('pkgItemsList').innerHTML = '';
 
   apiFetch('getPackageOrder', { orderNo: String(orderNo) })
@@ -407,14 +471,11 @@ function openPackageOrder(orderNo) {
       if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
       _currentPkgData = data;
 
-      // Pre-populate saved boxes
       (data.items||[]).forEach(function(item, idx) {
         var savedBoxes = data.boxes && data.boxes[item.itemCode];
-        if (savedBoxes && savedBoxes.length) {
-          _pkgBoxes[idx] = savedBoxes.map(function(b) { return { qty: b.qtyInBox||0, weight: b.weight||0, photoUrl: null }; });
-        } else {
-          _pkgBoxes[idx] = [{ qty: item.qtyPulled||0, weight: 0, photoUrl: null }];
-        }
+        _pkgBoxes[idx] = savedBoxes && savedBoxes.length
+          ? savedBoxes.map(function(b) { return { qty:b.qtyInBox||0, weight:b.weight||0, photoUrl:null }; })
+          : [{ qty:item.qtyPulled||0, weight:0, photoUrl:null }];
       });
 
       renderPackageDetail(data);
@@ -438,7 +499,6 @@ function renderPackageDetail(data) {
     return '<div class="pkg-item-card">' +
       '<div class="pkg-item-header">' +
         '<div class="pick-item-code">' + item.itemCode + '</div>' +
-        '<div class="pick-item-desc">' + (item.description||'') + '</div>' +
         '<div class="pkg-item-meta">' +
           'Lot: <strong>' + (item.lotNumber||'—') + '</strong>' +
           ' &nbsp;·&nbsp; Pulled: <strong>' + item.qtyPulled + ' ' + item.uom + '</strong>' +
@@ -484,7 +544,7 @@ function renderItemBoxes(itemIdx) {
 
 function addBox(itemIdx) {
   if (!_pkgBoxes[itemIdx]) _pkgBoxes[itemIdx] = [];
-  _pkgBoxes[itemIdx].push({ qty: 0, weight: 0, photoUrl: null });
+  _pkgBoxes[itemIdx].push({ qty:0, weight:0, photoUrl:null });
   renderItemBoxes(itemIdx);
 }
 
@@ -517,14 +577,11 @@ function syncBoxesFromDOM() {
   (_currentPkgData.items||[]).forEach(function(item, idx) {
     var boxes = _pkgBoxes[idx] || [];
     boxes.forEach(function(box, bIdx) {
-      var qEl = document.getElementById('box-' + idx + '-' + bIdx);
-      if (!qEl) return;
-      var qInput = qEl.querySelector('input[type="number"]:nth-child(1)');
-      var wInput = qEl.querySelector('input[type="number"]:nth-child(2)');
-      // Sync directly from DOM
-      var allNums = qEl.querySelectorAll('input[type="number"]');
-      if (allNums[0]) _pkgBoxes[idx][bIdx].qty    = parseFloat(allNums[0].value || 0);
-      if (allNums[1]) _pkgBoxes[idx][bIdx].weight  = parseFloat(allNums[1].value || 0);
+      var el = document.getElementById('box-' + idx + '-' + bIdx);
+      if (!el) return;
+      var nums = el.querySelectorAll('input[type="number"]');
+      if (nums[0]) _pkgBoxes[idx][bIdx].qty    = parseFloat(nums[0].value || 0);
+      if (nums[1]) _pkgBoxes[idx][bIdx].weight  = parseFloat(nums[1].value || 0);
     });
   });
 }
@@ -540,11 +597,11 @@ function collectPackagePayload(complete) {
     var itemBoxes  = _pkgBoxes[idx] || [{}];
     var totalBoxes = itemBoxes.length;
     itemBoxes.forEach(function(box, bIdx) {
-      boxes.push({ itemCode: item.itemCode, boxIndex: bIdx+1, totalBoxes: totalBoxes, qtyInBox: box.qty||0, weight: box.weight||0 });
+      boxes.push({ itemCode:item.itemCode, boxIndex:bIdx+1, totalBoxes:totalBoxes, qtyInBox:box.qty||0, weight:box.weight||0 });
     });
   });
 
-  return { orderNumber: h.orderNumber, boxes: boxes, complete: complete };
+  return { orderNumber:h.orderNumber, boxes:boxes, complete:complete };
 }
 
 function savePackageDraft() {
@@ -572,7 +629,7 @@ function completeOrder() {
     .then(function(res) {
       btn.disabled = false; btn.textContent = '✓ Complete order & generate tags';
       if (res.success) {
-        showToast('Order complete! Generating PDF tags…', 'success');
+        showToast('Order complete! Generating tags…', 'success');
         setTimeout(function() { generatePDFTags(); }, 400);
         setTimeout(exitPackageDetail, 1800);
       } else {
@@ -592,13 +649,12 @@ function exitPackageDetail() {
 // ── PDF Generation ────────────────────────────────────────
 
 function renderPDFTag(doc, data, photoUrl) {
-  // Navy header bar
   doc.setFillColor(26, 42, 74);
   doc.rect(0, 0, 100, 13, 'F');
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(10);
   doc.setFont(undefined, 'bold');
-  doc.text('ArTek WMS', 50, 9, { align: 'center' });
+  doc.text('ArTek WMS', 50, 9, { align:'center' });
 
   doc.setTextColor(30, 41, 59);
   var y = 20;
@@ -609,21 +665,19 @@ function renderPDFTag(doc, data, photoUrl) {
     ['Lot #',    String(data.lotNumber|| '—')],
     ['Qty',      String(data.qty) + ' ' + String(data.uom||'')],
     ['Weight',   String(data.weight)  + ' lbs'],
-    ['Package',  String(data.boxIndex) + ' of ' + String(data.totalBoxes)]
+    ['Package',  'Box ' + data.boxIndex + ' of ' + data.totalBoxes]
   ];
 
   fields.forEach(function(f) {
     doc.setFont(undefined, 'bold');   doc.setFontSize(7.5); doc.text(f[0] + ':', 7, y);
-    doc.setFont(undefined, 'normal'); doc.setFontSize(8);   doc.text(f[1], 30, y);
+    doc.setFont(undefined, 'normal'); doc.setFontSize(8);   doc.text(f[1], 32, y);
     y += 6.5;
   });
 
-  // Photo on right side if available
   if (photoUrl) {
     try { doc.addImage(photoUrl, 'JPEG', 64, 15, 30, 48); } catch(ex) {}
   }
 
-  // Border
   doc.setDrawColor(180, 180, 180);
   doc.setLineWidth(0.4);
   doc.rect(2, 14, 96, 53);
@@ -640,35 +694,29 @@ function generatePDFTags() {
     if (!jsPDFLib) { showToast('PDF library not loaded', 'error'); return; }
 
     items.forEach(function(item, idx) {
-      var itemBoxes = _pkgBoxes[idx] || [{ qty: item.qtyPulled||0, weight: 0, photoUrl: null }];
+      var itemBoxes = _pkgBoxes[idx] || [{ qty:item.qtyPulled||0, weight:0, photoUrl:null }];
       itemBoxes.forEach(function(box, bIdx) {
         if (!doc) {
-          doc = new jsPDFLib({ orientation: 'landscape', unit: 'mm', format: [100, 70] });
+          doc = new jsPDFLib({ orientation:'landscape', unit:'mm', format:[100, 70] });
         } else {
           doc.addPage([100, 70], 'landscape');
         }
         renderPDFTag(doc, {
-          location:   h.location   || '—',
-          po:         h.po         || '—',
+          location:   h.location    || '—',
+          po:         h.po          || '—',
           partCode:   item.itemCode,
-          lotNumber:  item.lotNumber|| '—',
-          qty:        box.qty      || 0,
-          uom:        item.uom     || '',
-          weight:     box.weight   || 0,
+          lotNumber:  item.lotNumber || '—',
+          qty:        box.qty        || 0,
+          uom:        item.uom       || '',
+          weight:     box.weight     || 0,
           boxIndex:   bIdx + 1,
           totalBoxes: itemBoxes.length
         }, box.photoUrl || null);
       });
     });
 
-    if (doc) {
-      doc.save('ArTek_Order_' + h.orderNumber + '_tags.pdf');
-      showToast('PDF tags downloaded!', 'success');
-    }
-  } catch(e) {
-    console.error('PDF error:', e);
-    showToast('PDF error: ' + e.message, 'error');
-  }
+    if (doc) { doc.save('ArTek_Order_' + h.orderNumber + '_tags.pdf'); showToast('PDF tags downloaded!', 'success'); }
+  } catch(e) { showToast('PDF error: ' + e.message, 'error'); }
 }
 
 function reprintPDF(orderNo) {
@@ -686,10 +734,10 @@ function reprintPDF(orderNo) {
 
         items.forEach(function(item) {
           var code      = item.itemCode;
-          var itemBoxes = boxes[code] || [{ boxIndex:1, totalBoxes:1, qtyInBox: item.qtyPulled||0, weight:0 }];
+          var itemBoxes = boxes[code] || [{ boxIndex:1, totalBoxes:1, qtyInBox:item.qtyPulled||0, weight:0 }];
           itemBoxes.forEach(function(box) {
             if (!doc) {
-              doc = new jsPDFLib({ orientation: 'landscape', unit: 'mm', format: [100, 70] });
+              doc = new jsPDFLib({ orientation:'landscape', unit:'mm', format:[100, 70] });
             } else {
               doc.addPage([100, 70], 'landscape');
             }
@@ -729,7 +777,6 @@ function loadOOR() {
 
 function renderOOR() {
   var q = document.getElementById('oorSearch') ? document.getElementById('oorSearch').value.toLowerCase().trim() : '';
-
   var filtered = _oorData.filter(function(o) {
     return !q ||
       String(o.orderNo).toLowerCase().indexOf(q) !== -1 ||
@@ -744,12 +791,8 @@ function renderOOR() {
 
   list.innerHTML = filtered.map(function(o, idx) {
     var locBadge = '<span class="badge badge-loc">' + (o.location||'—') + '</span>';
-    var wmsBadge = '';
-    if (o.wmsStatus === 'Complete') {
-      wmsBadge = '<span class="badge badge-done">✓ Done</span>';
-    } else if (o.wmsStatus === 'Packaging' || o.wmsStatus === 'Picked') {
-      wmsBadge = '<span class="badge badge-inprog">In WMS</span>';
-    }
+    var wmsBadge = o.wmsStatus === 'Complete' ? '<span class="badge badge-done">✓ Done</span>' :
+                   (o.wmsStatus === 'Packaging' || o.wmsStatus === 'Picked') ? '<span class="badge badge-inprog">In WMS</span>' : '';
 
     return '<div class="oor-card" id="oor-' + idx + '">' +
       '<div class="oor-card-header" onclick="toggleOOR(' + idx + ',\'' + o.orderNo + '\',\'' + (o.wmsStatus||'') + '\')">' +
@@ -774,11 +817,8 @@ function toggleOOR(idx, orderNo, wmsStatus) {
   card.classList.add('open');
 
   if (_oorItemCache[orderNo]) {
-    if (typeof _oorItemCache[orderNo].items !== 'undefined') {
-      renderOORItemsWithBoxes(itemsDiv, _oorItemCache[orderNo]);
-    } else {
-      renderOORItems(itemsDiv, _oorItemCache[orderNo]);
-    }
+    if (_oorItemCache[orderNo].items) renderOORItemsWithBoxes(itemsDiv, _oorItemCache[orderNo]);
+    else renderOORItems(itemsDiv, _oorItemCache[orderNo]);
     return;
   }
 
@@ -787,7 +827,7 @@ function toggleOOR(idx, orderNo, wmsStatus) {
   if (wmsStatus === 'Complete') {
     apiFetch('getCompletedOrderDetails', { orderNo: String(orderNo) })
       .then(function(data) {
-        if (data.error) { itemsDiv.innerHTML = '<div class="oor-item-loading">Error: ' + data.error + '</div>'; return; }
+        if (data.error) { itemsDiv.innerHTML = '<div class="oor-item-loading">' + data.error + '</div>'; return; }
         _oorItemCache[orderNo] = data;
         renderOORItemsWithBoxes(itemsDiv, data);
       })
@@ -820,25 +860,22 @@ function renderOORItemsWithBoxes(container, data) {
   var items  = data.items  || [];
   var boxes  = data.boxes  || {};
   var header = data.header || {};
-
   if (!items.length) { container.innerHTML = '<div class="oor-item-loading">No items.</div>'; return; }
 
   container.innerHTML = '<div class="oor-complete-note">✓ Order packaged and complete</div>' +
     items.map(function(item) {
       var code      = item.itemCode || '—';
       var itemBoxes = boxes[code]   || [];
-      var boxHtml   = '';
-      if (itemBoxes.length) {
-        boxHtml = '<div class="oor-item-boxes">' +
-          itemBoxes.map(function(b) {
-            return '<span class="box-tag">Box ' + b.boxIndex + '/' + b.totalBoxes + ': ' + b.qtyInBox + ' ' + (item.uom||'') + ' · ' + b.weight + ' lbs</span>';
-          }).join('') +
-        '</div>';
-      }
+      var boxHtml   = itemBoxes.length
+        ? '<div class="oor-item-boxes">' +
+            itemBoxes.map(function(b) {
+              return '<span class="box-tag">Box ' + b.boxIndex + '/' + b.totalBoxes + ': ' + b.qtyInBox + ' ' + (item.uom||'') + ' · ' + b.weight + ' lbs</span>';
+            }).join('') +
+          '</div>'
+        : '';
       return '<div class="oor-item">' +
         '<div style="flex:1;min-width:0">' +
           '<div class="oor-item-code">' + code + '</div>' +
-          '<div class="oor-item-desc">' + (item.description||'') + '</div>' +
           (item.lotNumber ? '<div class="oor-item-desc">Lot: ' + item.lotNumber + '</div>' : '') +
           boxHtml +
         '</div>' +
