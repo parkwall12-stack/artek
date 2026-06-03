@@ -21,17 +21,9 @@
           </linearGradient>
         </defs>
         <g transform="skewX(-8) translate(30, 5)">
-          <text x="0" y="105" font-family="'Arial Black','Impact',sans-serif"
-            font-size="108" font-weight="900" letter-spacing="-2"
-            fill="none" stroke="#111" stroke-width="14"
-            stroke-linejoin="round" paint-order="stroke">ArTek</text>
-          <text x="2" y="107" font-family="'Arial Black','Impact',sans-serif"
-            font-size="108" font-weight="900" letter-spacing="-2"
-            fill="#555" opacity="0.4">ArTek</text>
-          <text x="0" y="105" font-family="'Arial Black','Impact',sans-serif"
-            font-size="108" font-weight="900" letter-spacing="-2"
-            fill="url(#mg)" stroke="#222" stroke-width="3"
-            stroke-linejoin="round" paint-order="stroke">ArTek</text>
+          <text x="0" y="105" font-family="'Arial Black','Impact',sans-serif" font-size="108" font-weight="900" letter-spacing="-2" fill="none" stroke="#111" stroke-width="14" stroke-linejoin="round" paint-order="stroke">ArTek</text>
+          <text x="2" y="107" font-family="'Arial Black','Impact',sans-serif" font-size="108" font-weight="900" letter-spacing="-2" fill="#555" opacity="0.4">ArTek</text>
+          <text x="0" y="105" font-family="'Arial Black','Impact',sans-serif" font-size="108" font-weight="900" letter-spacing="-2" fill="url(#mg)" stroke="#222" stroke-width="3" stroke-linejoin="round" paint-order="stroke">ArTek</text>
         </g>
       </svg>
     </div>
@@ -45,33 +37,25 @@
   <!-- SCAN ORDERS LIST -->
   <div class="page active" id="page-scan">
     <div class="page-header">
-      <div>
-        <h1>Scan orders</h1>
-        <p class="page-sub">All completed pick orders</p>
-      </div>
+      <div><h1>Scan orders</h1><p class="page-sub">Completed pick records</p></div>
       <button class="fab" onclick="showNewOrder()" aria-label="New order">+</button>
     </div>
     <div class="search-wrap">
-      <input class="search-input" id="scanSearch" type="text"
-        placeholder="Search order number…" oninput="filterScanOrders()" autocomplete="off"/>
+      <input class="search-input" id="scanSearch" type="text" placeholder="Search order number…" oninput="filterScanOrders()" autocomplete="off"/>
     </div>
     <div id="orderList"></div>
   </div>
 
-  <!-- NEW ORDER — PHASE 1: LOOKUP -->
+  <!-- NEW ORDER — LOOKUP PHASE -->
   <div class="page" id="page-new-order">
     <div id="phase-lookup">
       <div class="page-header">
-        <div>
-          <h1>Scan order</h1>
-          <p class="page-sub">Enter or scan an OOR order number.</p>
-        </div>
+        <div><h1>Scan order</h1><p class="page-sub">Enter or scan an OOR order number.</p></div>
       </div>
       <div class="section-label">Order number</div>
       <div class="field-row">
-        <input type="text" id="orderNumber" placeholder="e.g. 242477" autocomplete="off"
-          onkeydown="if(event.key==='Enter') lookupOrder()"/>
-        <button class="scan-btn" title="Scan order barcode" onclick="openScanner('orderNumber')">&#9641;</button>
+        <input type="text" id="orderNumber" placeholder="e.g. 242477" autocomplete="off" onkeydown="if(event.key==='Enter') lookupOrder()"/>
+        <button class="scan-btn" onclick="openScanner('orderNumber')">&#9641;</button>
       </div>
       <div class="lookup-error" id="lookupError" style="display:none"></div>
       <div class="footer-actions">
@@ -80,7 +64,7 @@
       </div>
     </div>
 
-    <!-- PHASE 2: PICK LIST -->
+    <!-- PICK PHASE -->
     <div id="phase-pick" style="display:none">
       <div class="pick-order-header" id="pickOrderHeader"></div>
       <div id="pickItemsList"></div>
@@ -91,50 +75,35 @@
     </div>
   </div>
 
-  <!-- PACKAGE ORDERS -->
+  <!-- PACKAGE ORDERS LIST -->
   <div class="page" id="page-package">
     <div class="page-header">
-      <div>
-        <h1>Package orders</h1>
-        <p class="page-sub">Review and package scanned orders for shipment.</p>
-      </div>
+      <div><h1>Package orders</h1><p class="page-sub">Orders ready to package</p></div>
     </div>
     <div class="search-wrap">
-      <input class="search-input" id="packageSearch" type="text"
-        placeholder="Search order number…" oninput="filterPackageOrders()" autocomplete="off"/>
+      <input class="search-input" id="packageSearch" type="text" placeholder="Search order number…" oninput="filterPackageOrders()" autocomplete="off"/>
     </div>
-    <div class="coming-soon">
-      <div class="cs-icon">📦</div>
-      <p class="cs-title">Coming soon</p>
-      <p class="cs-sub">Select a scan order to review, edit, and mark it ready for shipment.</p>
+    <div id="packageList"></div>
+  </div>
+
+  <!-- PACKAGE ORDER DETAIL -->
+  <div class="page" id="page-package-detail">
+    <div id="pkgOrderHeader"></div>
+    <div id="pkgItemsList"></div>
+    <div class="footer-actions pkg-footer">
+      <button class="btn-exit" onclick="exitPackageDetail()">Back</button>
+      <button class="btn-save" id="savePkgBtn" onclick="savePackageDraft()">Save for later</button>
     </div>
+    <button class="btn-complete" id="completePkgBtn" onclick="completeOrder()">✓ Complete order &amp; generate tags</button>
   </div>
 
   <!-- OOR TAB -->
   <div class="page" id="page-oor">
     <div class="page-header">
-      <div>
-        <h1>Open orders</h1>
-        <p class="page-sub">McMaster orders from 5/22 onward</p>
-      </div>
+      <div><h1>Open orders</h1><p class="page-sub">McMaster orders from 5/22 onward · sorted by order #</p></div>
     </div>
     <div class="search-wrap">
-      <input class="search-input" id="oorSearch" type="text"
-        placeholder="Search order number or PO…" oninput="renderOOR()" autocomplete="off"/>
-    </div>
-    <div class="filter-bar">
-      <div class="filter-group">
-        <label class="filter-label">Location</label>
-        <div class="filter-chips" id="locationChips"></div>
-      </div>
-      <div class="filter-group">
-        <label class="filter-label">Ship type</label>
-        <div class="filter-chips">
-          <button class="chip active" id="chip-all"     onclick="setShipFilter('all')">All</button>
-          <button class="chip"        id="chip-collect" onclick="setShipFilter('collect')">Collect</button>
-          <button class="chip"        id="chip-prepaid" onclick="setShipFilter('prepaid')">Prepaid</button>
-        </div>
-      </div>
+      <input class="search-input" id="oorSearch" type="text" placeholder="Search order # or location…" oninput="renderOOR()" autocomplete="off"/>
     </div>
     <div id="oorList"></div>
   </div>
@@ -154,6 +123,7 @@
   <div class="toast" id="toast"></div>
 
   <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
