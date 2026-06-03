@@ -46,15 +46,18 @@
     <div id="orderList"></div>
   </div>
 
-  <!-- NEW ORDER — LOOKUP PHASE -->
+  <!-- NEW ORDER PAGE -->
   <div class="page" id="page-new-order">
+
+    <!-- PHASE 1: LOOKUP -->
     <div id="phase-lookup">
       <div class="page-header">
         <div><h1>Scan order</h1><p class="page-sub">Enter or scan an OOR order number.</p></div>
       </div>
       <div class="section-label">Order number</div>
       <div class="field-row">
-        <input type="text" id="orderNumber" placeholder="e.g. 242477" autocomplete="off" onkeydown="if(event.key==='Enter') lookupOrder()"/>
+        <input type="text" id="orderNumber" placeholder="e.g. 242477" autocomplete="off"
+          onkeydown="if(event.key==='Enter') lookupOrder()"/>
         <button class="scan-btn" onclick="openScanner('orderNumber')">&#9641;</button>
       </div>
       <div class="lookup-error" id="lookupError" style="display:none"></div>
@@ -62,9 +65,15 @@
         <button class="btn-exit" onclick="exitForm()">Exit</button>
         <button class="btn-save" id="lookupBtn" onclick="lookupOrder()">Look up order</button>
       </div>
+
+      <!-- Session picks list -->
+      <div id="sessionPicksWrap" style="display:none; margin-top:28px;">
+        <div class="section-label">Picked this session</div>
+        <div id="sessionPicksList"></div>
+      </div>
     </div>
 
-    <!-- PICK PHASE -->
+    <!-- PHASE 2: PICK -->
     <div id="phase-pick" style="display:none">
       <div class="pick-order-header" id="pickOrderHeader"></div>
       <div id="pickItemsList"></div>
@@ -100,7 +109,7 @@
   <!-- OOR TAB -->
   <div class="page" id="page-oor">
     <div class="page-header">
-      <div><h1>Open orders</h1><p class="page-sub">McMaster orders from 5/22 onward · sorted by order #</p></div>
+      <div><h1>Open orders</h1><p class="page-sub">McMaster orders from 5/22 · sorted by order #</p></div>
     </div>
     <div class="search-wrap">
       <input class="search-input" id="oorSearch" type="text" placeholder="Search order # or location…" oninput="renderOOR()" autocomplete="off"/>
