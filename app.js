@@ -15,30 +15,19 @@ var _oorItemCache    = {};
 var _currentPickData = null;
 var _currentPkgData  = null;
 var _pkgBoxes        = {};
-var _sessionPicks    = [];   // orders picked this session
+var _sessionPicks    = [];
 
-// ── JSONP ─────────────────────────────────────────────────
+// ── Fetch ─────────────────────────────────────────────────
 
 function apiFetch(action, payload) {
-  return new Promise(function(resolve, reject) {
-    var cbName = 'cb_' + Math.random().toString(36).substr(2, 9);
-    var script = document.createElement('script');
-    var url = API + '?action=' + encodeURIComponent(action) + '&callback=' + cbName;
-    if (payload) url += '&payload=' + encodeURIComponent(JSON.stringify(payload));
+  var url = API + '?action=' + encodeURIComponent(action);
+  if (payload) url += '&payload=' + encodeURIComponent(JSON.stringify(payload));
 
-    var timeout = setTimeout(function() { cleanup(); reject(new Error('Request timed out')); }, 15000);
-    window[cbName] = function(data) { cleanup(); resolve(data); };
-
-    function cleanup() {
-      clearTimeout(timeout);
-      delete window[cbName];
-      if (script.parentNode) script.parentNode.removeChild(script);
-    }
-
-    script.onerror = function() { cleanup(); reject(new Error('Script load error')); };
-    script.src = url;
-    document.head.appendChild(script);
-  });
+  return fetch(url, { redirect: 'follow' })
+    .then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    });
 }
 
 // ── Sound ─────────────────────────────────────────────────
@@ -79,8 +68,6 @@ function extractPartCode(itemCode) {
 }
 
 function extractMiddleCode(code) {
-  // FBMCM-464VNL000-24  →  464VNL000
-  // FB-464VNL000-120    →  464VNL000
   var parts = (code || '').trim().split('-');
   return parts.length >= 2 ? parts[1].trim().toUpperCase() : (code || '').trim().toUpperCase();
 }
@@ -216,8 +203,8 @@ function renderOrders(orders) {
   }
   list.innerHTML = orders.map(function(o) {
     var date  = o.timestamp ? new Date(o.timestamp).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '—';
-    var badge = o.status === 'Complete'   ? '<span class="badge badge-complete">Complete</span>'  :
-                o.status === 'Packaging'  ? '<span class="badge badge-inprog">Packaging</span>'   :
+    var badge = o.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>'  :
+                o.status === 'Packaging' ? '<span class="badge badge-inprog">Packaging</span>'   :
                 '<span class="badge badge-ready">Picked</span>';
     return '<div class="order-card">' +
       '<div class="order-icon">📋</div>' +
@@ -383,17 +370,13 @@ function savePick() {
     .then(function(res) {
       btn.disabled = false; btn.textContent = 'Save pick';
       if (res && res.success) {
-        // Add to session picks
         _sessionPicks.unshift({
           orderNumber: String(h.orderNo),
           po:          h.po       || '',
           location:    h.location || '',
           itemCount:   items.length
         });
-
         showToast('Order #' + h.orderNo + ' picked — ready to package', 'success');
-
-        // Go back to lookup with session list visible
         document.getElementById('phase-pick').style.display   = 'none';
         document.getElementById('phase-lookup').style.display = 'block';
         document.getElementById('orderNumber').value = '';
