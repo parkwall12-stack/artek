@@ -47,7 +47,7 @@
     <div class="page-header">
       <div>
         <h1>Scan orders</h1>
-        <p class="page-sub">All recorded scan orders</p>
+        <p class="page-sub">All completed pick orders</p>
       </div>
       <button class="fab" onclick="showNewOrder()" aria-label="New order">+</button>
     </div>
@@ -58,25 +58,36 @@
     <div id="orderList"></div>
   </div>
 
-  <!-- NEW ORDER FORM -->
+  <!-- NEW ORDER — PHASE 1: LOOKUP -->
   <div class="page" id="page-new-order">
-    <div class="page-header">
-      <div>
-        <h1>New scan order</h1>
-        <p class="page-sub">Fill in the order number and add parts below.</p>
+    <div id="phase-lookup">
+      <div class="page-header">
+        <div>
+          <h1>Scan order</h1>
+          <p class="page-sub">Enter or scan an OOR order number.</p>
+        </div>
+      </div>
+      <div class="section-label">Order number</div>
+      <div class="field-row">
+        <input type="text" id="orderNumber" placeholder="e.g. 242477" autocomplete="off"
+          onkeydown="if(event.key==='Enter') lookupOrder()"/>
+        <button class="scan-btn" title="Scan order barcode" onclick="openScanner('orderNumber')">&#9641;</button>
+      </div>
+      <div class="lookup-error" id="lookupError" style="display:none"></div>
+      <div class="footer-actions">
+        <button class="btn-exit" onclick="exitForm()">Exit</button>
+        <button class="btn-save" id="lookupBtn" onclick="lookupOrder()">Look up order</button>
       </div>
     </div>
-    <div class="section-label">Order number</div>
-    <div class="field-row">
-      <input type="text" id="orderNumber" placeholder="e.g. ORD-20240526-001" autocomplete="off"/>
-      <button class="scan-btn" title="Scan order barcode" onclick="openScanner('orderNumber')">&#9641;</button>
-    </div>
-    <div class="section-label">Parts</div>
-    <div id="partsContainer"></div>
-    <button class="add-part-btn" onclick="addPart()">+ Add another part</button>
-    <div class="footer-actions">
-      <button class="btn-exit" onclick="exitForm()">Exit</button>
-      <button class="btn-save" id="saveBtn" onclick="saveOrder()">Save order</button>
+
+    <!-- PHASE 2: PICK LIST -->
+    <div id="phase-pick" style="display:none">
+      <div class="pick-order-header" id="pickOrderHeader"></div>
+      <div id="pickItemsList"></div>
+      <div class="footer-actions" style="margin-top:24px">
+        <button class="btn-exit" onclick="backToLookup()">Back</button>
+        <button class="btn-save" id="savePickBtn" onclick="savePick()">Save pick</button>
+      </div>
     </div>
   </div>
 
