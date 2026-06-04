@@ -24,13 +24,19 @@ function apiFetch(action, payload) {
     var script = document.createElement('script');
     var url = API + '?action=' + encodeURIComponent(action) + '&callback=' + cbName;
     if (payload) url += '&payload=' + encodeURIComponent(JSON.stringify(payload));
-    var timeout = setTimeout(function() { cleanup(); reject(new Error('Request timed out')); }, 15000);
+
+    var timeout = setTimeout(function() {
+      cleanup(); reject(new Error('Request timed out'));
+    }, 15000);
+
     window[cbName] = function(data) { cleanup(); resolve(data); };
+
     function cleanup() {
       clearTimeout(timeout);
       delete window[cbName];
       if (script.parentNode) script.parentNode.removeChild(script);
     }
+
     script.onerror = function() { cleanup(); reject(new Error('Script load error')); };
     script.src = url;
     document.head.appendChild(script);
