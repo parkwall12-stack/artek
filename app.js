@@ -17,7 +17,8 @@ var _currentPkgData  = null;
 var _pkgBoxes        = {};
 var _sessionPicks    = [];
 
-// ── Fetch ─────────────────────────────────────────────────
+// ── JSONP ─────────────────────────────────────────────────
+
 function apiFetch(action, payload) {
   return new Promise(function(resolve, reject) {
     var cbName = 'cb_' + Math.random().toString(36).substr(2, 9);
@@ -42,6 +43,7 @@ function apiFetch(action, payload) {
     document.head.appendChild(script);
   });
 }
+
 // ── Sound ─────────────────────────────────────────────────
 
 function playGoodBeep() {
