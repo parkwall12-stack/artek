@@ -1,5 +1,5 @@
 // ── Config ────────────────────────────────────────────────
-var API = 'https://script.google.com/macros/s/AKfycbzAtTHWoapyH00uvH2eqz55u__9XSnA-oibjgX5BIEDbR01iffHxWeIFsH3IOBGpMbD/exec';
+var API = 'https://artek-proxy.parkwall12.workers.dev';
 
 var partCount        = 0;
 var _oorData         = [];
@@ -20,28 +20,9 @@ var _sessionPicks    = [];
 // ── JSONP ─────────────────────────────────────────────────
 
 function apiFetch(action, payload) {
-  return new Promise(function(resolve, reject) {
-    var cbName = 'cb_' + Math.random().toString(36).substr(2, 9);
-    var script = document.createElement('script');
-    var url = API + '?action=' + encodeURIComponent(action) + '&callback=' + cbName;
-    if (payload) url += '&payload=' + encodeURIComponent(JSON.stringify(payload));
-
-    var timeout = setTimeout(function() {
-      cleanup(); reject(new Error('Request timed out'));
-    }, 15000);
-
-    window[cbName] = function(data) { cleanup(); resolve(data); };
-
-    function cleanup() {
-      clearTimeout(timeout);
-      delete window[cbName];
-      if (script.parentNode) script.parentNode.removeChild(script);
-    }
-
-    script.onerror = function() { cleanup(); reject(new Error('Script load error')); };
-    script.src = url;
-    document.head.appendChild(script);
-  });
+  var url = API + '?action=' + encodeURIComponent(action);
+  if (payload) url += '&payload=' + encodeURIComponent(JSON.stringify(payload));
+  return fetch(url).then(function(r) { return r.json(); });
 }
 
 // ── Sound ─────────────────────────────────────────────────
