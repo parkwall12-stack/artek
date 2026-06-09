@@ -1,12 +1,9 @@
 // ── Config ────────────────────────────────────────────────
 var API = 'https://artek-proxy.parkwall12.workers.dev';
 
-var partCount        = 0;
 var _oorData         = [];
 var _scanData        = [];
 var _packageData     = [];
-var _activeLocation  = 'all';
-var _activeShip      = 'all';
 var _scanTargetId    = null;
 var _partScanIdx     = null;
 var _partScanCode    = null;
@@ -14,8 +11,9 @@ var _codeReader      = null;
 var _oorItemCache    = {};
 var _currentPickData = null;
 var _currentPkgData  = null;
-var _pkgBoxes        = [];   // [{parts:[{itemCode,qty,weight,photoUrl}]}]
+var _pkgBoxes        = [];
 var _sessionPicks    = [];
+var _pkgReturnTab    = null;
 
 // ── Fetch ─────────────────────────────────────────────────
 
@@ -23,6 +21,14 @@ function apiFetch(action, payload) {
   var url = API + '?action=' + encodeURIComponent(action);
   if (payload) url += '&payload=' + encodeURIComponent(JSON.stringify(payload));
   return fetch(url).then(function(r) { return r.json(); });
+}
+
+function apiFetchPost(body) {
+  return fetch(API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }).then(function(r) { return r.json(); });
 }
 
 // ── Sound ─────────────────────────────────────────────────
@@ -85,8 +91,8 @@ function openScanner(targetInputId) {
   _scanTargetId = targetInputId;
   _partScanIdx  = null;
   _partScanCode = null;
-  var label = targetInputId === 'orderNumber'              ? 'Order number' :
-              targetInputId.startsWith('pick-lot-')        ? 'Lot number'   : 'Part number';
+  var label = targetInputId === 'orderNumber' ? 'Order number' :
+              targetInputId.startsWith('pick-lot-') ? 'Lot number' : 'Part number';
   _startScanner('Scanning: ' + label);
 }
 
@@ -102,9 +108,7 @@ function _startScanner(label) {
   document.getElementById('scannerStatus').textContent = 'Starting camera…';
   document.getElementById('scannerStatus').className = 'scanner-status';
   document.getElementById('scannerOverlay').classList.add('active');
-
   if (_codeReader) { try { _codeReader.reset(); } catch(e) {} _codeReader = null; }
-
   setTimeout(function() {
     try {
       _codeReader = new ZXing.BrowserMultiFormatReader();
@@ -151,26 +155,22 @@ function verifyPartScan(idx, expectedCode, scannedCode) {
   var expectedMiddle = extractMiddleCode(expectedCode);
   var scannedMiddle  = extractMiddleCode(scannedCode);
   var isMatch        = expectedMiddle === scannedMiddle;
-
   var card     = document.getElementById('pick-card-' + idx);
   var input    = document.getElementById('pick-scan-' + idx);
   var status   = document.getElementById('pick-status-' + idx);
   var qtyInput = document.getElementById('pick-qty-' + idx);
-
   if (input)  { input.value = scannedCode; input.className = isMatch ? 'input-match' : 'input-no-match'; }
   if (card)   { card.classList.remove('match','no-match'); card.classList.add(isMatch ? 'match' : 'no-match'); }
   if (status) {
     if (isMatch) {
       status.textContent = '✓ Match — ' + expectedMiddle + ' verified';
       status.className = 'pick-status match';
-      playGoodBeep();
-      showToast('✓ Part matched!', 'success');
+      playGoodBeep(); showToast('✓ Part matched!', 'success');
       if (qtyInput) setTimeout(function() { qtyInput.focus(); }, 100);
     } else {
       status.textContent = '✗ No match — expected: ' + expectedMiddle + ' · got: ' + scannedMiddle;
       status.className = 'pick-status no-match';
-      playBadBeep();
-      showToast('✗ Wrong part!', 'error');
+      playBadBeep(); showToast('✗ Wrong part!', 'error');
     }
   }
 }
@@ -200,7 +200,7 @@ function renderOrders(orders) {
     var badge = o.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>'  :
                 o.status === 'Packaging' ? '<span class="badge badge-inprog">Packaging</span>'   :
                 '<span class="badge badge-ready">Picked</span>';
-    return '<div class="order-card">' +
+    return '<div class="order-card" onclick="openOrderDetail(\'' + o.orderNumber + '\')">' +
       '<div class="order-icon">📋</div>' +
       '<div class="order-info">' +
         '<div class="order-num">Order #' + o.orderNumber + '</div>' +
@@ -209,6 +209,117 @@ function renderOrders(orders) {
       '</div>' + badge +
     '</div>';
   }).join('');
+}
+
+// ── Order detail (read-only view) ─────────────────────────
+
+function openOrderDetail(orderNo) {
+  _pkgReturnTab = document.querySelector('.tab-btn.active') ? document.querySelector('.tab-btn.active').id.replace('tab-','') : 'scan';
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+  document.getElementById('page-order-detail').classList.add('active');
+  document.getElementById('detailContent').innerHTML = '<p style="color:#94a3b8;text-align:center;padding:40px">Loading…</p>';
+
+  Promise.all([
+    apiFetch('getPackageOrder',  { orderNo: String(orderNo) }),
+    apiFetch('getBoxPhotos',     { orderNo: String(orderNo) })
+  ]).then(function(results) {
+    var data   = results[0];
+    var photos = results[1] || [];
+    if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
+    renderOrderDetail(data, photos);
+  }).catch(function() { showToast('Error loading order', 'error'); });
+}
+
+function renderOrderDetail(data, photos) {
+  var h      = data.header;
+  var items  = data.items  || [];
+  var boxes  = data.boxes  || {};
+  photos     = photos || [];
+
+  // Photo lookup: "boxIdx|partCode" → thumbnailUrl
+  var photoLookup = {};
+  photos.forEach(function(p) { photoLookup[p.boxIdx + '|' + p.partCode] = p.thumbnailUrl; });
+
+  // Item info lookup
+  var itemInfo = {};
+  items.forEach(function(item) { itemInfo[item.itemCode] = item; });
+
+  // Build box-centric view
+  var byBox = {};
+  Object.keys(boxes).forEach(function(itemCode) {
+    (boxes[itemCode] || []).forEach(function(box) {
+      if (!byBox[box.boxIndex]) byBox[box.boxIndex] = [];
+      byBox[box.boxIndex].push({ itemCode:itemCode, qtyInBox:box.qtyInBox, weight:box.weight, totalBoxes:box.totalBoxes });
+    });
+  });
+  var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
+
+  var statusBadge = h.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>'  :
+                    h.status === 'Packaging'  ? '<span class="badge badge-inprog">Packaging</span>'   :
+                    '<span class="badge badge-ready">Picked</span>';
+
+  var bodyHtml = '';
+
+  if (boxIdxs.length === 0) {
+    // Picked/no boxes yet — show scan items
+    bodyHtml = '<div class="detail-box-section">' +
+      '<div class="detail-box-title">Picked items</div>';
+    if (items.length === 0) {
+      bodyHtml += '<p style="color:#94a3b8;font-size:.85rem;padding:8px 0">No items found.</p>';
+    }
+    items.forEach(function(item) {
+      bodyHtml += '<div class="detail-part-entry">' +
+        '<div class="detail-item-code">' + item.itemCode + '</div>' +
+        (item.description ? '<div class="detail-item-desc">' + item.description + '</div>' : '') +
+        '<div class="detail-item-row"><span>Lot #</span><strong>' + (item.lotNumber || '—') + '</strong></div>' +
+        '<div class="detail-item-row"><span>Pieces pulled</span><strong>' + item.qtyPulled + ' ' + item.uom + '</strong></div>' +
+        '<div class="detail-item-row"><span>Required</span><strong>' + item.qtyRequired + ' ' + item.uom + '</strong></div>' +
+        '<div class="detail-item-row"><span>Match</span><strong>' + (item.match ? '✓ Yes' : '✗ No') + '</strong></div>' +
+      '</div>';
+    });
+    bodyHtml += '</div>';
+    bodyHtml += '<button class="btn-save" style="width:100%;margin-top:4px" onclick="openPackageOrder(\'' + h.orderNumber + '\')">Open in Packaging →</button>';
+  } else {
+    boxIdxs.forEach(function(bIdx) {
+      var parts = byBox[bIdx];
+      bodyHtml += '<div class="detail-box-section">' +
+        '<div class="detail-box-title">Box ' + bIdx + '</div>';
+      parts.forEach(function(part) {
+        var info     = itemInfo[part.itemCode] || {};
+        var thumbUrl = photoLookup[bIdx + '|' + part.itemCode];
+        bodyHtml += '<div class="detail-part-entry">' +
+          '<div class="detail-item-code">' + part.itemCode + '</div>' +
+          (info.description ? '<div class="detail-item-desc">' + info.description + '</div>' : '') +
+          '<div class="detail-item-row"><span>Lot #</span><strong>' + (info.lotNumber || '—') + '</strong></div>' +
+          '<div class="detail-item-row"><span>Qty</span><strong>' + part.qtyInBox + ' ' + (info.uom || 'ft') + '</strong></div>' +
+          '<div class="detail-item-row"><span>Weight</span><strong>' + part.weight + ' lbs</strong></div>' +
+          (thumbUrl ? '<img src="' + thumbUrl + '" class="detail-photo"/>' : '') +
+        '</div>';
+      });
+      bodyHtml += '</div>';
+    });
+    bodyHtml += '<button class="reprint-btn" style="margin-top:4px" onclick="reprintPDF(\'' + h.orderNumber + '\')">🖨 Print tags</button>';
+  }
+
+  document.getElementById('detailContent').innerHTML =
+    '<div class="pick-order-header">' +
+      '<div class="pick-order-num">Order #' + h.orderNumber + ' &nbsp;' + statusBadge + '</div>' +
+      '<div class="pick-order-meta">' +
+        '<span class="pick-order-po">PO: ' + (h.po||'—') + '</span>' +
+        ' &nbsp;·&nbsp; ' + (h.location||'—') +
+      '</div>' +
+    '</div>' + bodyHtml;
+}
+
+function exitOrderDetail() {
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+  var returnTab = _pkgReturnTab || 'scan';
+  document.getElementById('tab-' + returnTab).classList.add('active');
+  document.getElementById('page-' + returnTab).classList.add('active');
+  if (returnTab === 'scan')    loadOrders();
+  else if (returnTab === 'oor') loadOOR();
+  else                          loadPackageOrders();
+  _pkgReturnTab = null;
 }
 
 // ── Order lookup ──────────────────────────────────────────
@@ -248,7 +359,6 @@ function lookupOrder() {
   document.getElementById('lookupError').style.display = 'none';
   var btn = document.getElementById('lookupBtn');
   btn.disabled = true; btn.textContent = 'Looking up…';
-
   apiFetch('getFullOOROrder', { orderNo: num })
     .then(function(data) {
       btn.disabled = false; btn.textContent = 'Look up order';
@@ -266,10 +376,8 @@ function lookupOrder() {
 function showPickPhase(data) {
   document.getElementById('phase-lookup').style.display = 'none';
   document.getElementById('phase-pick').style.display   = 'block';
-
   var h  = data.header;
   var pd = h.promiseDate ? new Date(h.promiseDate).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '—';
-
   document.getElementById('pickOrderHeader').innerHTML =
     '<div class="pick-order-num">Order #' + h.orderNo + '</div>' +
     '<div class="pick-order-meta">' +
@@ -278,7 +386,6 @@ function showPickPhase(data) {
       ' &nbsp;·&nbsp; ' + (h.isPrepaid ? 'Prepaid' : 'Collect') +
       ' &nbsp;·&nbsp; Promise: ' + pd +
     '</div>';
-
   document.getElementById('pickItemsList').innerHTML = (data.items||[]).map(function(item, idx) {
     var code     = extractPartCode(item.itemCode);
     var safeCode = code.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -288,22 +395,18 @@ function showPickPhase(data) {
         '<div class="pick-item-desc">' + (item.description||'') + '</div>' +
         '<span class="pick-item-req">Required: ' + item.qtyOrdered + ' ' + item.uom + '</span>' +
       '</div>' +
-
       '<div class="pick-label">Part number</div>' +
       '<div class="pick-scan-row">' +
-        '<input type="text" id="pick-scan-' + idx + '" placeholder="Scan or type part #" autocomplete="off"' +
-          ' onchange="verifyPartScan(' + idx + ',\'' + safeCode + '\',this.value)"/>' +
+        '<input type="text" id="pick-scan-' + idx + '" placeholder="Scan or type part #" autocomplete="off" onchange="verifyPartScan(' + idx + ',\'' + safeCode + '\',this.value)"/>' +
         '<button class="scan-btn" onclick="openPartScanner(' + idx + ',\'' + safeCode + '\')">&#9641;</button>' +
       '</div>' +
       '<div class="pick-status" id="pick-status-' + idx + '"></div>' +
-
       '<div class="pick-label">Lot number</div>' +
       '<div class="pick-scan-row">' +
         '<input type="text" id="pick-lot-' + idx + '" placeholder="Scan or type lot #" autocomplete="off"/>' +
         '<button class="scan-btn" onclick="openScanner(\'pick-lot-' + idx + '\')">&#9641;</button>' +
         '<button class="autofill-btn" onclick="autofillLot(' + idx + ')" title="Autofill lot number">⟳</button>' +
       '</div>' +
-
       '<div class="pick-qty-row">' +
         '<label>Pieces pulled</label>' +
         '<input type="number" id="pick-qty-' + idx + '" placeholder="0" min="0"/>' +
@@ -312,9 +415,7 @@ function showPickPhase(data) {
   }).join('');
 }
 
-function autofillLot(idx) {
-  showToast('Autofill lot — coming soon', 'info');
-}
+function autofillLot(idx) { showToast('Autofill lot — coming soon', 'info'); }
 
 function backToLookup() {
   document.getElementById('phase-lookup').style.display = 'block';
@@ -329,23 +430,18 @@ function savePick() {
   var h     = _currentPickData.header;
   var items = _currentPickData.items || [];
   var btn   = document.getElementById('savePickBtn');
-
   var payload = {
-    orderNumber: String(h.orderNo),
-    po:          h.po       || '',
-    location:    h.location || '',
+    orderNumber: String(h.orderNo), po: h.po||'', location: h.location||'',
     items: items.map(function(item, idx) {
       var expectedCode = extractPartCode(item.itemCode);
       var scannedCode  = (document.getElementById('pick-scan-' + idx)||{}).value || '';
       var lotNumber    = (document.getElementById('pick-lot-'  + idx)||{}).value || '';
       var qtyPulled    = parseFloat((document.getElementById('pick-qty-' + idx)||{}).value || 0);
       var match        = extractMiddleCode(scannedCode) === extractMiddleCode(expectedCode);
-      return { expectedCode:expectedCode, description:item.description||'', uom:item.uom||'', lotNumber:lotNumber, qtyRequired:item.qtyOrdered, qtyPulled:qtyPulled, match:match };
+      return { expectedCode, description:item.description||'', uom:item.uom||'', lotNumber, qtyRequired:item.qtyOrdered, qtyPulled, match };
     })
   };
-
   btn.disabled = true; btn.textContent = 'Saving…';
-
   apiFetch('saveScanOrder', payload)
     .then(function(res) {
       btn.disabled = false; btn.textContent = 'Save pick';
@@ -359,9 +455,7 @@ function savePick() {
         _currentPickData = null;
         renderSessionPicks();
         setTimeout(function() { document.getElementById('orderNumber').focus(); }, 100);
-      } else {
-        showToast('Error: ' + ((res && res.error) || 'Unknown error'), 'error');
-      }
+      } else { showToast('Error: ' + ((res && res.error) || 'Unknown error'), 'error'); }
     })
     .catch(function(err) { btn.disabled = false; btn.textContent = 'Save pick'; showToast('Error: ' + (err.message||'check connection'), 'error'); });
 }
@@ -408,13 +502,13 @@ function renderPackageList(orders) {
   }).join('');
 }
 
-// ── Package order detail ──────────────────────────────────
+// ── Package order detail (edit mode) ─────────────────────
 
 function openPackageOrder(orderNo) {
+  _pkgReturnTab = document.querySelector('.tab-btn.active') ? document.querySelector('.tab-btn.active').id.replace('tab-','') : 'package';
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   document.getElementById('page-package-detail').classList.add('active');
   _pkgBoxes = [];
-
   document.getElementById('pkgOrderHeader').innerHTML = '<div class="pick-order-header"><p style="color:#94a3b8">Loading…</p></div>';
   document.getElementById('pkgItemsList').innerHTML = '';
 
@@ -422,9 +516,6 @@ function openPackageOrder(orderNo) {
     .then(function(data) {
       if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
       _currentPkgData = data;
-
-      // Reconstruct box-centric structure from saved flat data
-      // data.boxes = { itemCode: [{boxIndex, totalBoxes, qtyInBox, weight}] }
       var byBox = {};
       Object.keys(data.boxes || {}).forEach(function(itemCode) {
         (data.boxes[itemCode] || []).forEach(function(box) {
@@ -432,17 +523,17 @@ function openPackageOrder(orderNo) {
           byBox[box.boxIndex].push({ itemCode:itemCode, qty:box.qtyInBox||0, weight:box.weight||0, photoUrl:null });
         });
       });
-
       var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
       if (boxIdxs.length > 0) {
         _pkgBoxes = boxIdxs.map(function(bIdx) { return { parts: byBox[bIdx] }; });
+      } else if (data.items && data.items.length > 0) {
+        _pkgBoxes = [{ parts: data.items.map(function(item) { return { itemCode:item.itemCode, qty:item.qtyPulled||0, weight:0, photoUrl:null }; }) }];
       } else {
         _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
       }
-
       renderPackageDetail(data);
     })
-    .catch(function() { showToast('Error loading order', 'error'); });
+    .catch(function(err) { console.error('openPackageOrder error:', err); showToast('Error loading order', 'error'); });
 }
 
 function renderPackageDetail(data) {
@@ -456,7 +547,6 @@ function renderPackageDetail(data) {
         ' &nbsp;·&nbsp; Status: ' + h.status +
       '</div>' +
     '</div>';
-
   document.getElementById('pkgItemsList').innerHTML = '<div id="boxesList"></div>';
   renderAllBoxes();
 }
@@ -474,11 +564,8 @@ function renderBoxSection(box, bIdx, items, isLast) {
   var partsHtml = box.parts.map(function(part, pIdx) {
     return renderPartEntry(bIdx, pIdx, part, items, box.parts.length > 1);
   }).join('');
-
   return '<div class="box-section" id="box-section-' + bIdx + '">' +
-    '<div class="box-section-header">' +
-      '<span class="box-section-title">Box ' + (bIdx + 1) + '</span>' +
-    '</div>' +
+    '<div class="box-section-header"><span class="box-section-title">Box ' + (bIdx + 1) + '</span></div>' +
     '<div id="box-' + bIdx + '-parts">' + partsHtml + '</div>' +
     '<div class="box-action-row">' +
       '<button class="add-part-to-box-btn" onclick="addPartToBox(' + bIdx + ')">+ Add part to box</button>' +
@@ -493,30 +580,25 @@ function renderPartEntry(bIdx, pIdx, part, items, canRemove) {
       var sel = part.itemCode === item.itemCode ? ' selected' : '';
       return '<option value="' + item.itemCode + '"' + sel + '>' + item.itemCode + (item.description ? ' — ' + item.description : '') + '</option>';
     }).join('');
-
   return '<div class="box-part-entry">' +
     '<div class="part-select-row">' +
       '<select class="part-select" onchange="updatePartField(' + bIdx + ',' + pIdx + ',\'itemCode\',this.value)">' + optionsHtml + '</select>' +
       (canRemove ? '<button class="remove-btn" onclick="removePartFromBox(' + bIdx + ',' + pIdx + ')">✕</button>' : '') +
     '</div>' +
     '<div class="part-field-row">' +
-      '<div class="pkg-field">' +
-        '<label>Qty (Feet)</label>' +
+      '<div class="pkg-field"><label>Qty pulled (feet)</label>' +
         '<input type="number" value="' + (part.qty||'') + '" placeholder="0" oninput="updatePartField(' + bIdx + ',' + pIdx + ',\'qty\',this.value)"/>' +
       '</div>' +
-      '<div class="pkg-field">' +
-        '<label>Weight (lbs)</label>' +
+      '<div class="pkg-field"><label>Weight (lbs)</label>' +
         '<input type="number" value="' + (part.weight||'') + '" placeholder="0" oninput="updatePartField(' + bIdx + ',' + pIdx + ',\'weight\',this.value)"/>' +
       '</div>' +
     '</div>' +
     '<div class="pkg-photo-field">' +
-  '<input type="file" accept="image/*" capture="environment" id="photo-input-' + bIdx + '-' + pIdx + '" style="display:none" onchange="handleBoxPhotoNew(' + bIdx + ',' + pIdx + ',this)"/>' +
-  '<button class="photo-btn" onclick="document.getElementById(\'photo-input-' + bIdx + '-' + pIdx + '\').click()">📷 Take photo</button>' +
-  '<div class="photo-preview" id="photo-' + bIdx + '-' + pIdx + '">' +
-    (part.photoUrl ? '<img src="' + part.photoUrl + '"/>' : '') +
-  '</div>' +
-'</div>';
-  
+      '<input type="file" accept="image/*" capture="environment" id="photo-input-' + bIdx + '-' + pIdx + '" style="display:none" onchange="handleBoxPhotoNew(' + bIdx + ',' + pIdx + ',this)"/>' +
+      '<button class="photo-btn" onclick="document.getElementById(\'photo-input-' + bIdx + '-' + pIdx + '\').click()">📷 Take photo</button>' +
+      '<div class="photo-preview" id="photo-' + bIdx + '-' + pIdx + '">' + (part.photoUrl ? '<img src="' + part.photoUrl + '"/>' : '') + '</div>' +
+    '</div>' +
+  '</div>';
 }
 
 function updatePartField(bIdx, pIdx, field, value) {
@@ -559,9 +641,9 @@ function handleBoxPhotoNew(bIdx, pIdx, input) {
 
 function collectPackagePayload(complete) {
   if (!_currentPkgData) return null;
-  var h          = _currentPkgData.header;
+  var h = _currentPkgData.header;
   var totalBoxes = _pkgBoxes.length;
-  var boxes      = [];
+  var boxes = [];
   _pkgBoxes.forEach(function(box, bIdx) {
     box.parts.forEach(function(part) {
       if (part.itemCode) {
@@ -595,7 +677,24 @@ function completeOrder() {
     .then(function(res) {
       btn.disabled = false; btn.textContent = '✓ Complete order';
       if (res.success) {
-        showToast('Order complete!', 'success');
+        // Generate PDF and collect photos for Drive
+        var pdfBase64 = generatePDFBase64();
+        var photos    = collectPhotos();
+        var h         = _currentPkgData.header;
+        var date      = new Date().toISOString().split('T')[0];
+        apiFetchPost({
+          action: 'saveToDrive',
+          orderNo: h.orderNumber,
+          location: h.location || 'MCM',
+          po: h.po || '',
+          completionDate: date,
+          pdfBase64: pdfBase64,
+          photos: photos
+        }).then(function(dr) {
+          showToast(dr.success ? 'Order complete — saved to Drive!' : 'Order complete (Drive: ' + (dr.error||'failed') + ')', 'success');
+        }).catch(function() {
+          showToast('Order complete (Drive offline)', 'success');
+        });
         setTimeout(exitPackageDetail, 900);
       } else {
         showToast('Error: ' + (res.error||''), 'error');
@@ -606,33 +705,94 @@ function completeOrder() {
 
 function exitPackageDetail() {
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-  document.getElementById('tab-package').classList.add('active');
-  document.getElementById('page-package').classList.add('active');
-  loadPackageOrders();
+  var returnTab = _pkgReturnTab || 'package';
+  document.getElementById('tab-' + returnTab).classList.add('active');
+  document.getElementById('page-' + returnTab).classList.add('active');
+  if (returnTab === 'scan')    loadOrders();
+  else                         loadPackageOrders();
+  _pkgReturnTab = null;
 }
 
 // ── PDF Generation ────────────────────────────────────────
 
 function renderPDFTag(doc, data) {
   doc.setTextColor(0, 0, 0);
+  var x = 8; var y = 14; var lineH = 9;
 
-  // Location — large bold
-  doc.setFont(undefined, 'bold');
-  doc.setFontSize(16);
-  doc.text(String(data.location || '—'), 8, 18);
+  // Line 1: McMaster-Carr / MCMXXX
+  doc.setFont(undefined, 'bold'); doc.setFontSize(12);
+  doc.text('McMaster-Carr / ' + String(data.location || '—'), x, y); y += lineH;
 
-  // Indented fields
-  doc.setFont(undefined, 'normal');
-  doc.setFontSize(11);
-  var indent = 14;
-  var y = 30;
-  doc.text('PO: ' + String(data.po || '—'), indent, y);       y += 10;
-  doc.text(String(data.qty||0) + ' ' + String(data.uom||''), indent, y); y += 10;
-  doc.text('Box ' + data.boxIndex + ' of ' + data.totalBoxes, indent, y);
+  doc.setFont(undefined, 'normal'); doc.setFontSize(10);
+
+  // Line 2: P.O. #
+  doc.text('P.O. # ' + String(data.po || '—'), x, y); y += lineH;
+
+  // Line 3: LOT #
+  doc.text('LOT # ' + String(data.lotNumber || '—'), x, y); y += lineH;
+
+  // Line 4: Part #:
+  doc.text('Part #:', x, y); y += 7;
+
+  // Line 5: part code (bold, smaller to fit long codes)
+  doc.setFont(undefined, 'bold'); doc.setFontSize(9);
+  doc.text(String(data.partCode || '—'), x, y); y += 8;
+
+  // Line 6: QTY
+  doc.setFont(undefined, 'normal'); doc.setFontSize(10);
+  doc.text('QTY: ' + String(data.qty || 0) + ' ' + String(data.uom || 'Feet'), x, y); y += lineH;
+
+  // Line 7: Pkg
+  doc.text('Pkg: ' + data.boxIndex + ' of ' + data.totalBoxes, x, y);
+}
+
+function generatePDFBase64() {
+  var jsPDFLib = window.jspdf ? window.jspdf.jsPDF : (window.jsPDF || null);
+  if (!jsPDFLib || !_currentPkgData) return null;
+  var h = _currentPkgData.header;
+  var items = _currentPkgData.items || [];
+  var itemInfo = {};
+  items.forEach(function(item) { itemInfo[item.itemCode] = item; });
+  var doc = null;
+  var totalBoxes = _pkgBoxes.length;
+  _pkgBoxes.forEach(function(box, bIdx) {
+    box.parts.forEach(function(part) {
+      if (!part.itemCode) return;
+      var info = itemInfo[part.itemCode] || {};
+      if (!doc) { doc = new jsPDFLib({ orientation:'landscape', unit:'mm', format:[100, 70] }); }
+      else { doc.addPage([100, 70], 'landscape'); }
+      renderPDFTag(doc, {
+        location:   h.location || '—',
+        po:         h.po || '—',
+        lotNumber:  info.lotNumber || '—',
+        partCode:   part.itemCode,
+        qty:        part.qty || 0,
+        uom:        info.uom || 'Feet',
+        boxIndex:   bIdx + 1,
+        totalBoxes: totalBoxes
+      });
+    });
+  });
+  if (!doc) return null;
+  return doc.output('datauristring').split(',')[1];
+}
+
+function collectPhotos() {
+  var photos = [];
+  _pkgBoxes.forEach(function(box, bIdx) {
+    box.parts.forEach(function(part) {
+      if (part.photoUrl && part.photoUrl.indexOf('base64,') !== -1) {
+        var base64 = part.photoUrl.split('base64,')[1];
+        var ext    = part.photoUrl.indexOf('image/png') !== -1 ? 'png' : 'jpg';
+        photos.push({ boxIdx:bIdx+1, partCode:part.itemCode||'part', qty:part.qty||0, base64:base64, ext:ext });
+      }
+    });
+  });
+  return photos;
 }
 
 function reprintPDF(orderNo) {
-  apiFetch('getCompletedOrderDetails', { orderNo: String(orderNo) })
+  apiFetch('getPackageOrder', { orderNo: String(orderNo) })
     .then(function(data) {
       if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
       var hdr   = data.header;
@@ -644,29 +804,34 @@ function reprintPDF(orderNo) {
 
       var jsPDFLib = window.jspdf ? window.jspdf.jsPDF : (window.jsPDF || null);
       if (!jsPDFLib) { showToast('PDF library not loaded', 'error'); return; }
-      var doc = null;
 
-      // Flatten and sort by boxIndex
       var allEntries = [];
       Object.keys(boxes).forEach(function(itemCode) {
         (boxes[itemCode] || []).forEach(function(box) {
-          allEntries.push({ itemCode:itemCode, boxIndex:box.boxIndex, totalBoxes:box.totalBoxes, qtyInBox:box.qtyInBox, weight:box.weight });
+          allEntries.push({ itemCode:itemCode, boxIndex:box.boxIndex, totalBoxes:box.totalBoxes, qtyInBox:box.qtyInBox });
         });
       });
       allEntries.sort(function(a,b) { return a.boxIndex - b.boxIndex; });
 
+      if (allEntries.length === 0) {
+        items.forEach(function(item) {
+          allEntries.push({ itemCode:item.itemCode, boxIndex:1, totalBoxes:1, qtyInBox:item.qtyPulled||0 });
+        });
+      }
+      if (allEntries.length === 0) { showToast('No data for this order', 'error'); return; }
+
+      var doc = null;
       allEntries.forEach(function(entry) {
         var info = itemInfo[entry.itemCode] || {};
-        if (!doc) {
-          doc = new jsPDFLib({ orientation:'landscape', unit:'mm', format:[100, 70] });
-        } else {
-          doc.addPage([100, 70], 'landscape');
-        }
+        if (!doc) { doc = new jsPDFLib({ orientation:'landscape', unit:'mm', format:[100, 70] }); }
+        else { doc.addPage([100, 70], 'landscape'); }
         renderPDFTag(doc, {
           location:   hdr.location || '—',
-          po:         hdr.po       || '—',
+          po:         hdr.po || '—',
+          lotNumber:  info.lotNumber || '—',
+          partCode:   entry.itemCode,
           qty:        entry.qtyInBox,
-          uom:        info.uom || '',
+          uom:        info.uom || 'Feet',
           boxIndex:   entry.boxIndex,
           totalBoxes: entry.totalBoxes
         });
@@ -696,18 +861,12 @@ function renderOOR() {
   var filtered = _oorData.filter(function(o) {
     return !q || String(o.orderNo).toLowerCase().indexOf(q) !== -1 || String(o.location||'').toLowerCase().indexOf(q) !== -1;
   });
-
   var list = document.getElementById('oorList');
-  if (!filtered.length) {
-    list.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><p>No orders found.</p></div>';
-    return;
-  }
-
+  if (!filtered.length) { list.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><p>No orders found.</p></div>'; return; }
   list.innerHTML = filtered.map(function(o, idx) {
     var locBadge = '<span class="badge badge-loc">' + (o.location||'—') + '</span>';
     var wmsBadge = o.wmsStatus === 'Complete' ? '<span class="badge badge-done">✓ Done</span>' :
                    (o.wmsStatus === 'Packaging' || o.wmsStatus === 'Picked') ? '<span class="badge badge-inprog">In WMS</span>' : '';
-
     return '<div class="oor-card" id="oor-' + idx + '">' +
       '<div class="oor-card-header" onclick="toggleOOR(' + idx + ',\'' + o.orderNo + '\',\'' + (o.wmsStatus||'') + '\')">' +
         '<div class="oor-order-icon">📦</div>' +
@@ -729,17 +888,14 @@ function toggleOOR(idx, orderNo, wmsStatus) {
   if (!card) return;
   if (card.classList.contains('open')) { card.classList.remove('open'); return; }
   card.classList.add('open');
-
   if (_oorItemCache[orderNo]) {
     if (_oorItemCache[orderNo].items) renderOORItemsWithBoxes(itemsDiv, _oorItemCache[orderNo]);
     else renderOORItems(itemsDiv, _oorItemCache[orderNo]);
     return;
   }
-
   itemsDiv.innerHTML = '<div class="oor-item-loading">Loading…</div>';
-
   if (wmsStatus === 'Complete') {
-    apiFetch('getCompletedOrderDetails', { orderNo: String(orderNo) })
+    apiFetch('getPackageOrder', { orderNo: String(orderNo) })
       .then(function(data) {
         if (data.error) { itemsDiv.innerHTML = '<div class="oor-item-loading">' + data.error + '</div>'; return; }
         _oorItemCache[orderNo] = data;
@@ -791,9 +947,26 @@ function renderOORItemsWithBoxes(container, data) {
         '<div class="oor-item-qty">' + (item.qtyRequired||item.qtyPulled||0) + ' ' + (item.uom||'') + '</div>' +
       '</div>';
     }).join('') +
-    '<div style="padding:10px 16px">' +
-      '<button class="reprint-btn" onclick="reprintPDF(\'' + (header.orderNumber||'') + '\')">🖨 Print tags</button>' +
+    '<div class="oor-action-row">' +
+      '<button class="oor-action-btn" onclick="reprintPDF(\'' + (header.orderNumber||'') + '\')">🖨 Print tags</button>' +
+      '<button class="oor-action-btn oor-action-btn-view" onclick="viewOrderFromOOR(\'' + (header.orderNumber||'') + '\')">📋 View order</button>' +
     '</div>';
+}
+
+function viewOrderFromOOR(orderNo) {
+  _pkgReturnTab = 'oor';
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+  document.getElementById('page-order-detail').classList.add('active');
+  document.getElementById('detailContent').innerHTML = '<p style="color:#94a3b8;text-align:center;padding:40px">Loading…</p>';
+  Promise.all([
+    apiFetch('getPackageOrder', { orderNo: String(orderNo) }),
+    apiFetch('getBoxPhotos',    { orderNo: String(orderNo) })
+  ]).then(function(results) {
+    var data   = results[0];
+    var photos = results[1] || [];
+    if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
+    renderOrderDetail(data, photos);
+  }).catch(function() { showToast('Error loading order', 'error'); });
 }
 
 // ── Toast ─────────────────────────────────────────────────
