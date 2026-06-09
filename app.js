@@ -16,6 +16,7 @@ var _currentPickData = null;
 var _currentPkgData  = null;
 var _pkgBoxes        = [];   // [{parts:[{itemCode,qty,weight,photoUrl}]}]
 var _sessionPicks    = [];
+var _pkgReturnTab = null;
 
 // ── Fetch ─────────────────────────────────────────────────
 
@@ -200,7 +201,7 @@ function renderOrders(orders) {
     var badge = o.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>'  :
                 o.status === 'Packaging' ? '<span class="badge badge-inprog">Packaging</span>'   :
                 '<span class="badge badge-ready">Picked</span>';
-    return '<div class="order-card">' +
+    return '<div class="order-card" onclick="openPackageOrder(\'' + o.orderNumber + '\')">' +
       '<div class="order-icon">📋</div>' +
       '<div class="order-info">' +
         '<div class="order-num">Order #' + o.orderNumber + '</div>' +
@@ -410,6 +411,7 @@ function renderPackageList(orders) {
 // ── Package order detail ──────────────────────────────────
 
 function openPackageOrder(orderNo) {
+  _pkgReturnTab = document.querySelector('.tab-btn.active') ? document.querySelector('.tab-btn.active').id.replace('tab-','') : 'package';
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   document.getElementById('page-package-detail').classList.add('active');
   _pkgBoxes = [];
@@ -604,9 +606,13 @@ function completeOrder() {
 
 function exitPackageDetail() {
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-  document.getElementById('tab-package').classList.add('active');
-  document.getElementById('page-package').classList.add('active');
-  loadPackageOrders();
+  // Return to whichever tab we came from
+  var returnTab = _pkgReturnTab || 'package';
+  document.getElementById('tab-' + returnTab).classList.add('active');
+  document.getElementById('page-' + returnTab).classList.add('active');
+  if (returnTab === 'scan')    loadOrders();
+  else                         loadPackageOrders();
+  _pkgReturnTab = null;
 }
 
 // ── PDF Generation ────────────────────────────────────────
@@ -644,14 +650,26 @@ function reprintPDF(orderNo) {
       if (!jsPDFLib) { showToast('PDF library not loaded', 'error'); return; }
       var doc = null;
 
-      // Flatten and sort by boxIndex
+      // Flatten box entries
       var allEntries = [];
       Object.keys(boxes).forEach(function(itemCode) {
         (boxes[itemCode] || []).forEach(function(box) {
-          allEntries.push({ itemCode:itemCode, boxIndex:box.boxIndex, totalBoxes:box.totalBoxes, qtyInBox:box.qtyInBox, weight:box.weight });
+          allEntries.push({ itemCode:itemCode, boxIndex:box.boxIndex, totalBoxes:box.totalBoxes, qtyInBox:box.qtyInBox });
         });
       });
       allEntries.sort(function(a,b) { return a.boxIndex - b.boxIndex; });
+
+      // Fallback — no box data, generate one tag per item
+      if (allEntries.length === 0) {
+        items.forEach(function(item) {
+          allEntries.push({ itemCode:item.itemCode, boxIndex:1, totalBoxes:1, qtyInBox:item.qtyPulled||0 });
+        });
+      }
+
+      if (allEntries.length === 0) {
+        showToast('No data found for this order', 'error');
+        return;
+      }
 
       allEntries.forEach(function(entry) {
         var info = itemInfo[entry.itemCode] || {};
@@ -674,7 +692,6 @@ function reprintPDF(orderNo) {
     })
     .catch(function() { showToast('Error loading order', 'error'); });
 }
-
 // ── OOR ───────────────────────────────────────────────────
 
 function loadOOR() {
