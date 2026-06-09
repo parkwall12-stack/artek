@@ -18,6 +18,40 @@ var _pkgBoxes        = [];   // [{parts:[{itemCode,qty,weight,photoUrl}]}]
 var _sessionPicks    = [];
 var _pkgReturnTab = null;
 
+
+// ── Passcode ──────────────────────────────────────────────
+var PASSCODE = '3311'; // change this to your 4-digit code
+
+function pcNext(el, nextId) {
+  if (el.value.length === 1) document.getElementById(nextId).focus();
+}
+
+function pcKey(event, el, prevId) {
+  if (event.key === 'Backspace' && el.value === '' && prevId) {
+    document.getElementById(prevId).focus();
+  }
+}
+
+function pcCheck() {
+  var code = ['pc1','pc2','pc3','pc4'].map(function(id) { return document.getElementById(id).value; }).join('');
+  if (code === PASSCODE) {
+    document.getElementById('passcodeScreen').style.display = 'none';
+    sessionStorage.setItem('artek-auth', '1');
+  } else {
+    document.getElementById('pcError').textContent = 'Incorrect passcode';
+    ['pc1','pc2','pc3','pc4'].forEach(function(id) { document.getElementById(id).value = ''; });
+    setTimeout(function() { document.getElementById('pcError').textContent = ''; }, 2000);
+    document.getElementById('pc1').focus();
+  }
+}
+
+// Auto-skip if already authenticated this session
+if (sessionStorage.getItem('artek-auth') === '1') {
+  document.addEventListener('DOMContentLoaded', function() {
+    var screen = document.getElementById('passcodeScreen');
+    if (screen) screen.style.display = 'none';
+  });
+}
 // ── Fetch ─────────────────────────────────────────────────
 
 function apiFetch(action, payload) {
