@@ -409,65 +409,8 @@ function renderPackageList(orders) {
   }).join('');
 }
 
-// ── Package order detail ──────────────────────────────────
-
-function openPackageOrder(orderNo) {
-  _pkgReturnTab = document.querySelector('.tab-btn.active') ? document.querySelector('.tab-btn.active').id.replace('tab-','') : 'package';
-  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-  document.getElementById('page-package-detail').classList.add('active');
-  _pkgBoxes = [];
-
-  document.getElementById('pkgOrderHeader').innerHTML = '<div class="pick-order-header"><p style="color:#94a3b8">Loading…</p></div>';
-  document.getElementById('pkgItemsList').innerHTML = '';
-
-function openPackageOrder(orderNo) {
-  _pkgReturnTab = document.querySelector('.tab-btn.active') ? document.querySelector('.tab-btn.active').id.replace('tab-','') : 'package';
-  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-  document.getElementById('page-package-detail').classList.add('active');
-  _pkgBoxes = [];
-
-  document.getElementById('pkgOrderHeader').innerHTML = '<div class="pick-order-header"><p style="color:#94a3b8">Loading…</p></div>';
-  document.getElementById('pkgItemsList').innerHTML = '';
-
-  apiFetch('getPackageOrder', { orderNo: String(orderNo) })
-    .then(function(data) {
-      if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
-      _currentPkgData = data;
-
-      // Check for saved box data
-      var byBox = {};
-      Object.keys(data.boxes || {}).forEach(function(itemCode) {
-        (data.boxes[itemCode] || []).forEach(function(box) {
-          if (!byBox[box.boxIndex]) byBox[box.boxIndex] = [];
-          byBox[box.boxIndex].push({ itemCode:itemCode, qty:box.qtyInBox||0, weight:box.weight||0, photoUrl:null });
-        });
-      });
-
-      var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
-
-      if (boxIdxs.length > 0) {
-        // Restore saved box data
-        _pkgBoxes = boxIdxs.map(function(bIdx) { return { parts: byBox[bIdx] }; });
-      } else if (data.items && data.items.length > 0) {
-        // Pre-populate Box 1 with all picked items
-        _pkgBoxes = [{
-          parts: data.items.map(function(item) {
-            return { itemCode: item.itemCode, qty: item.qtyPulled || 0, weight: 0, photoUrl: null };
-          })
-        }];
-      } else {
-        // Nothing found — blank box
-        _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
-      }
-
-      renderPackageDetail(data);
-    })
-    .catch(function(err) {
-      console.error('openPackageOrder error:', err);
-      showToast('Error loading order', 'error');
-    });
-}
-
+// ── Package order detail ──────────────────────────────────function openPackageOrder(orderNo) {  _pkgReturnTab = document.querySelector('.tab-btn.active') ? document.querySelector('.tab-btn.active').id.replace('tab-','') : 'package';  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });  document.getElementById('page-package-detail').classList.add('active');  _pkgBoxes = [];  document.getElementById('pkgOrderHeader').innerHTML = '<div class="pick-order-header"><p style="color:#94a3b8">Loading…</p></div>';  document.getElementById('pkgItemsList').innerHTML = '';function openPackageOrder(orderNo) {  _pkgReturnTab = document.querySelector('.tab-btn.active') ? document.querySelector('.tab-btn.active').id.replace('tab-','') : 'package';  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });@@ -458,6 +467,7 @@ function openPackageOrder(orderNo) {      if (data.error) { showToast('Error: ' + data.error, 'error'); return; }      _currentPkgData = data;      // Check for saved box data      var byBox = {};      Object.keys(data.boxes || {}).forEach(function(itemCode) {        (data.boxes[itemCode] || []).forEach(function(box) {@@ -469,19 +479,26 @@ function openPackageOrder(orderNo) {      var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });      if (boxIdxs.length > 0) {        // Restore saved box data        _pkgBoxes = boxIdxs.map(function(bIdx) { return { parts: byBox[bIdx] }; });      } else if (data.items && data.items.length > 0) {        // Pre-populate Box 1 with all picked items        _pkgBoxes = [{          parts: data.items.map(function(item) {            return { itemCode: item.itemCode, qty: item.qtyPulled || 0, weight: 0, photoUrl: null };          })        }];      } else {        // Nothing found — blank box        _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];      }      renderPackageDetail(data);    })    .catch(function(err) {      console.error('openPackageOrder error:', err);      showToast('Error loading order', 'error');    });}function renderPackageDetail(data) {
+0 commit commentsComments0 (0)Lock conversationCommentSubscribeYou're not receiving notifications from this thread.
 function renderPackageDetail(data) {
   var h = data.header;
   document.getElementById('pkgOrderHeader').innerHTML =
