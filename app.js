@@ -500,7 +500,7 @@ function renderPartEntry(bIdx, pIdx, part, items, canRemove) {
     '</div>' +
     '<div class="part-field-row">' +
       '<div class="pkg-field">' +
-        '<label>Qty pulled</label>' +
+        '<label>Qty pulled (feet)</label>' +
         '<input type="number" value="' + (part.qty||'') + '" placeholder="0" oninput="updatePartField(' + bIdx + ',' + pIdx + ',\'qty\',this.value)"/>' +
       '</div>' +
       '<div class="pkg-field">' +
