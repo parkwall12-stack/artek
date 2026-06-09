@@ -19,14 +19,6 @@ var _sessionPicks    = [];
 var _pkgReturnTab = null;
 
 
-
-// Auto-skip if already authenticated this session
-if (sessionStorage.getItem('artek-auth') === '1') {
-  document.addEventListener('DOMContentLoaded', function() {
-    var screen = document.getElementById('passcodeScreen');
-    if (screen) screen.style.display = 'none';
-  });
-}
 // ── Fetch ─────────────────────────────────────────────────
 
 function apiFetch(action, payload) {
