@@ -20,16 +20,27 @@ var _pkgReturnTab = null;
 
 
 // ── Passcode ──────────────────────────────────────────────
-var PASSCODE = '3311'; // change this to your 4-digit code
+var PASSCODE = '3311'; // change to your code
 
-function pcNext(el, nextId) {
-  if (el.value.length === 1) document.getElementById(nextId).focus();
+function pcCheck() {
+  var input = document.getElementById('pcInput');
+  if (!input) return;
+  if (input.value === PASSCODE) {
+    document.getElementById('passcodeScreen').style.display = 'none';
+    sessionStorage.setItem('artek-auth', '1');
+  } else {
+    document.getElementById('pcError').textContent = 'Incorrect passcode';
+    input.value = '';
+    setTimeout(function() { document.getElementById('pcError').textContent = ''; }, 2000);
+    input.focus();
+  }
 }
 
-function pcKey(event, el, prevId) {
-  if (event.key === 'Backspace' && el.value === '' && prevId) {
-    document.getElementById(prevId).focus();
-  }
+if (sessionStorage.getItem('artek-auth') === '1') {
+  document.addEventListener('DOMContentLoaded', function() {
+    var screen = document.getElementById('passcodeScreen');
+    if (screen) screen.style.display = 'none';
+  });
 }
 
 function pcCheck() {
