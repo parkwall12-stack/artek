@@ -204,12 +204,12 @@ function renderOrders(orders) {
       '<div class="order-icon">📋</div>' +
       '<div class="order-info">' +
         '<div class="order-num">Order #' + o.orderNumber + '</div>' +
-        '<div class="order-meta">' + date + (o.location ? ' &nbsp;·&nbsp; ' + o.location : '') + (o.po ? ' &nbsp;·&nbsp; PO: ' + o.po : '') + '</div>' +
+        '<div class="order-meta">' + date + (o.location ? ' &nbsp;·&nbsp; ' + o.location : '') + '</div>' +
+        (o.po ? '<div class="order-meta">PO: ' + o.po + '</div>' : '') +
       '</div>' + badge +
     '</div>';
   }).join('');
 }
-
 // ── Order lookup ──────────────────────────────────────────
 
 function showNewOrder() {
