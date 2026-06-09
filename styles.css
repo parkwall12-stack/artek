@@ -149,6 +149,8 @@ body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:
 .add-new-box-btn:hover { background:var(--navy-light); }
 .remove-btn { height:28px; width:28px; border-radius:var(--radius); border:none; background:transparent; color:var(--muted); cursor:pointer; font-size:15px; transition:background .15s; flex-shrink:0; }
 .remove-btn:hover { background:#fee2e2; color:#b91c1c; }
+.delete-box-btn { height:28px; padding:0 10px; border-radius:var(--radius); border:none; background:#fee2e2; color:#b91c1c; cursor:pointer; font-size:.78rem; font-weight:600; transition:background .15s; }
+.delete-box-btn:hover { background:#fecaca; }
 
 /* ── Order detail (read-only) ────────────────── */
 .detail-box-section { background:var(--surface); border:1.5px solid var(--border); border-radius:var(--radius-lg); padding:14px 16px; margin-bottom:16px; }
