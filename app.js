@@ -14,10 +14,10 @@ var _codeReader      = null;
 var _oorItemCache    = {};
 var _currentPickData = null;
 var _currentPkgData  = null;
-var _pkgBoxes        = {};
+var _pkgBoxes        = [];   // [{parts:[{itemCode,qty,weight,photoUrl}]}]
 var _sessionPicks    = [];
 
-// ── JSONP ─────────────────────────────────────────────────
+// ── Fetch ─────────────────────────────────────────────────
 
 function apiFetch(action, payload) {
   var url = API + '?action=' + encodeURIComponent(action);
@@ -85,8 +85,8 @@ function openScanner(targetInputId) {
   _scanTargetId = targetInputId;
   _partScanIdx  = null;
   _partScanCode = null;
-  var label = targetInputId === 'orderNumber' ? 'Order number' :
-              targetInputId.startsWith('pick-lot-') ? 'Lot number' : 'Part number';
+  var label = targetInputId === 'orderNumber'              ? 'Order number' :
+              targetInputId.startsWith('pick-lot-')        ? 'Lot number'   : 'Part number';
   _startScanner('Scanning: ' + label);
 }
 
@@ -116,7 +116,6 @@ function _startScanner(label) {
             var code = result.getText();
             document.getElementById('scannerStatus').textContent = 'Got it: ' + code;
             document.getElementById('scannerStatus').className = 'scanner-status success';
-
             if (_partScanIdx !== null) {
               setTimeout(function() { closeScanner(); verifyPartScan(_partScanIdx, _partScanCode, code); }, 500);
             } else if (_scanTargetId) {
@@ -235,11 +234,7 @@ function renderSessionPicks() {
       '<div class="session-pick-icon">✓</div>' +
       '<div class="session-pick-info">' +
         '<div class="session-pick-num">Order #' + p.orderNumber + '</div>' +
-        '<div class="session-pick-meta">' +
-          (p.location || '') +
-          (p.po ? ' &nbsp;·&nbsp; PO: ' + p.po : '') +
-          ' &nbsp;·&nbsp; ' + p.itemCount + ' item' + (p.itemCount !== 1 ? 's' : '') +
-        '</div>' +
+        '<div class="session-pick-meta">' + (p.location||'') + (p.po ? ' &nbsp;·&nbsp; PO: ' + p.po : '') + ' &nbsp;·&nbsp; ' + p.itemCount + ' item' + (p.itemCount !== 1 ? 's' : '') + '</div>' +
       '</div>' +
       '<span class="badge badge-ok">Picked</span>' +
     '</div>';
@@ -248,11 +243,7 @@ function renderSessionPicks() {
 
 function lookupOrder() {
   var num = document.getElementById('orderNumber').value.trim();
-  if (!num) {
-    document.getElementById('lookupError').textContent = 'Please enter an order number.';
-    document.getElementById('lookupError').style.display = 'block';
-    return;
-  }
+  if (!num) { document.getElementById('lookupError').textContent = 'Please enter an order number.'; document.getElementById('lookupError').style.display = 'block'; return; }
   document.getElementById('lookupError').style.display = 'none';
   var btn = document.getElementById('lookupBtn');
   btn.disabled = true; btn.textContent = 'Looking up…';
@@ -260,11 +251,7 @@ function lookupOrder() {
   apiFetch('getFullOOROrder', { orderNo: num })
     .then(function(data) {
       btn.disabled = false; btn.textContent = 'Look up order';
-      if (data && data.error) {
-        document.getElementById('lookupError').textContent = data.error;
-        document.getElementById('lookupError').style.display = 'block';
-        return;
-      }
+      if (data && data.error) { document.getElementById('lookupError').textContent = data.error; document.getElementById('lookupError').style.display = 'block'; return; }
       _currentPickData = data;
       showPickPhase(data);
     })
@@ -313,14 +300,19 @@ function showPickPhase(data) {
       '<div class="pick-scan-row">' +
         '<input type="text" id="pick-lot-' + idx + '" placeholder="Scan or type lot #" autocomplete="off"/>' +
         '<button class="scan-btn" onclick="openScanner(\'pick-lot-' + idx + '\')">&#9641;</button>' +
+        '<button class="autofill-btn" onclick="autofillLot(' + idx + ')" title="Autofill lot number">⟳</button>' +
       '</div>' +
 
       '<div class="pick-qty-row">' +
-        '<label>Qty pulled (' + item.uom + ')</label>' +
+        '<label>Pieces pulled</label>' +
         '<input type="number" id="pick-qty-' + idx + '" placeholder="0" min="0"/>' +
       '</div>' +
     '</div>';
   }).join('');
+}
+
+function autofillLot(idx) {
+  showToast('Autofill lot — coming soon', 'info');
 }
 
 function backToLookup() {
@@ -347,15 +339,7 @@ function savePick() {
       var lotNumber    = (document.getElementById('pick-lot-'  + idx)||{}).value || '';
       var qtyPulled    = parseFloat((document.getElementById('pick-qty-' + idx)||{}).value || 0);
       var match        = extractMiddleCode(scannedCode) === extractMiddleCode(expectedCode);
-      return {
-        expectedCode: expectedCode,
-        description:  item.description || '',
-        uom:          item.uom || '',
-        lotNumber:    lotNumber,
-        qtyRequired:  item.qtyOrdered,
-        qtyPulled:    qtyPulled,
-        match:        match
-      };
+      return { expectedCode:expectedCode, description:item.description||'', uom:item.uom||'', lotNumber:lotNumber, qtyRequired:item.qtyOrdered, qtyPulled:qtyPulled, match:match };
     })
   };
 
@@ -365,12 +349,7 @@ function savePick() {
     .then(function(res) {
       btn.disabled = false; btn.textContent = 'Save pick';
       if (res && res.success) {
-        _sessionPicks.unshift({
-          orderNumber: String(h.orderNo),
-          po:          h.po       || '',
-          location:    h.location || '',
-          itemCount:   items.length
-        });
+        _sessionPicks.unshift({ orderNumber:String(h.orderNo), po:h.po||'', location:h.location||'', itemCount:items.length });
         showToast('Order #' + h.orderNo + ' picked — ready to package', 'success');
         document.getElementById('phase-pick').style.display   = 'none';
         document.getElementById('phase-lookup').style.display = 'block';
@@ -383,10 +362,7 @@ function savePick() {
         showToast('Error: ' + ((res && res.error) || 'Unknown error'), 'error');
       }
     })
-    .catch(function(err) {
-      btn.disabled = false; btn.textContent = 'Save pick';
-      showToast('Error: ' + (err.message || 'check connection'), 'error');
-    });
+    .catch(function(err) { btn.disabled = false; btn.textContent = 'Save pick'; showToast('Error: ' + (err.message||'check connection'), 'error'); });
 }
 
 function exitForm() {
@@ -420,9 +396,7 @@ function renderPackageList(orders) {
     return;
   }
   list.innerHTML = orders.map(function(o) {
-    var badge = o.status === 'Packaging'
-      ? '<span class="badge badge-inprog">In progress</span>'
-      : '<span class="badge badge-ready">Ready</span>';
+    var badge = o.status === 'Packaging' ? '<span class="badge badge-inprog">In progress</span>' : '<span class="badge badge-ready">Ready</span>';
     return '<div class="order-card" onclick="openPackageOrder(\'' + o.orderNumber + '\')">' +
       '<div class="order-icon">📦</div>' +
       '<div class="order-info">' +
@@ -438,10 +412,9 @@ function renderPackageList(orders) {
 function openPackageOrder(orderNo) {
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   document.getElementById('page-package-detail').classList.add('active');
-  _pkgBoxes = {};
+  _pkgBoxes = [];
 
-  document.getElementById('pkgOrderHeader').innerHTML =
-    '<div class="pick-order-header"><p style="color:#94a3b8">Loading…</p></div>';
+  document.getElementById('pkgOrderHeader').innerHTML = '<div class="pick-order-header"><p style="color:#94a3b8">Loading…</p></div>';
   document.getElementById('pkgItemsList').innerHTML = '';
 
   apiFetch('getPackageOrder', { orderNo: String(orderNo) })
@@ -449,12 +422,22 @@ function openPackageOrder(orderNo) {
       if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
       _currentPkgData = data;
 
-      (data.items||[]).forEach(function(item, idx) {
-        var savedBoxes = data.boxes && data.boxes[item.itemCode];
-        _pkgBoxes[idx] = savedBoxes && savedBoxes.length
-          ? savedBoxes.map(function(b) { return { qty:b.qtyInBox||0, weight:b.weight||0, photoUrl:null }; })
-          : [{ qty:item.qtyPulled||0, weight:0, photoUrl:null }];
+      // Reconstruct box-centric structure from saved flat data
+      // data.boxes = { itemCode: [{boxIndex, totalBoxes, qtyInBox, weight}] }
+      var byBox = {};
+      Object.keys(data.boxes || {}).forEach(function(itemCode) {
+        (data.boxes[itemCode] || []).forEach(function(box) {
+          if (!byBox[box.boxIndex]) byBox[box.boxIndex] = [];
+          byBox[box.boxIndex].push({ itemCode:itemCode, qty:box.qtyInBox||0, weight:box.weight||0, photoUrl:null });
+        });
       });
+
+      var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
+      if (boxIdxs.length > 0) {
+        _pkgBoxes = boxIdxs.map(function(bIdx) { return { parts: byBox[bIdx] }; });
+      } else {
+        _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
+      }
 
       renderPackageDetail(data);
     })
@@ -473,112 +456,118 @@ function renderPackageDetail(data) {
       '</div>' +
     '</div>';
 
-  document.getElementById('pkgItemsList').innerHTML = (data.items||[]).map(function(item, idx) {
-    return '<div class="pkg-item-card">' +
-      '<div class="pkg-item-header">' +
-        '<div class="pick-item-code">' + item.itemCode + '</div>' +
-        '<div class="pkg-item-meta">' +
-          'Lot: <strong>' + (item.lotNumber||'—') + '</strong>' +
-          ' &nbsp;·&nbsp; Pulled: <strong>' + item.qtyPulled + ' ' + item.uom + '</strong>' +
-          ' &nbsp;·&nbsp; Required: <strong>' + item.qtyRequired + ' ' + item.uom + '</strong>' +
-        '</div>' +
-      '</div>' +
-      '<div id="boxes-' + idx + '"></div>' +
-      '<button class="add-box-btn" onclick="addBox(' + idx + ')">+ Add another box</button>' +
-    '</div>';
-  }).join('');
-
-  (data.items||[]).forEach(function(item, idx) { renderItemBoxes(idx); });
+  document.getElementById('pkgItemsList').innerHTML = '<div id="boxesList"></div>';
+  renderAllBoxes();
 }
 
-function renderItemBoxes(itemIdx) {
-  var boxes     = _pkgBoxes[itemIdx] || [{}];
-  var container = document.getElementById('boxes-' + itemIdx);
-  if (!container) return;
-
-  container.innerHTML = boxes.map(function(box, bIdx) {
-    return '<div class="box-card" id="box-' + itemIdx + '-' + bIdx + '">' +
-      '<div class="box-header">' +
-        '<span class="box-label">Box ' + (bIdx+1) + ' of ' + boxes.length + '</span>' +
-        (boxes.length > 1 ? '<button class="remove-btn" onclick="removeBox(' + itemIdx + ',' + bIdx + ')">✕</button>' : '') +
-      '</div>' +
-      '<div class="box-fields">' +
-        '<div class="box-field"><label>Qty in box</label>' +
-          '<input type="number" value="' + (box.qty||'') + '" placeholder="0" oninput="updateBoxField(' + itemIdx + ',' + bIdx + ',\'qty\',this.value)"/>' +
-        '</div>' +
-        '<div class="box-field"><label>Weight (lbs)</label>' +
-          '<input type="number" value="' + (box.weight||'') + '" placeholder="0" oninput="updateBoxField(' + itemIdx + ',' + bIdx + ',\'weight\',this.value)"/>' +
-        '</div>' +
-        '<div class="box-field full"><label>Photo (optional)</label>' +
-          '<input type="file" accept="image/*" capture="environment" onchange="handleBoxPhoto(' + itemIdx + ',' + bIdx + ',this)"/>' +
-          '<div class="photo-preview" id="photo-preview-' + itemIdx + '-' + bIdx + '">' +
-            (box.photoUrl ? '<img src="' + box.photoUrl + '"/>' : '') +
-          '</div>' +
-        '</div>' +
-      '</div>' +
-    '</div>';
+function renderAllBoxes() {
+  var container = document.getElementById('boxesList');
+  if (!container || !_currentPkgData) return;
+  var items = _currentPkgData.items || [];
+  container.innerHTML = _pkgBoxes.map(function(box, bIdx) {
+    return renderBoxSection(box, bIdx, items, bIdx === _pkgBoxes.length - 1);
   }).join('');
 }
 
-function addBox(itemIdx) {
-  if (!_pkgBoxes[itemIdx]) _pkgBoxes[itemIdx] = [];
-  _pkgBoxes[itemIdx].push({ qty:0, weight:0, photoUrl:null });
-  renderItemBoxes(itemIdx);
+function renderBoxSection(box, bIdx, items, isLast) {
+  var partsHtml = box.parts.map(function(part, pIdx) {
+    return renderPartEntry(bIdx, pIdx, part, items, box.parts.length > 1);
+  }).join('');
+
+  return '<div class="box-section" id="box-section-' + bIdx + '">' +
+    '<div class="box-section-header">' +
+      '<span class="box-section-title">Box ' + (bIdx + 1) + '</span>' +
+    '</div>' +
+    '<div id="box-' + bIdx + '-parts">' + partsHtml + '</div>' +
+    '<div class="box-action-row">' +
+      '<button class="add-part-to-box-btn" onclick="addPartToBox(' + bIdx + ')">+ Add part to box</button>' +
+      (isLast ? '<button class="add-new-box-btn" onclick="addNewBox()">+ Add box</button>' : '') +
+    '</div>' +
+  '</div>';
 }
 
-function removeBox(itemIdx, boxIdx) {
-  if (!_pkgBoxes[itemIdx] || _pkgBoxes[itemIdx].length <= 1) return;
-  _pkgBoxes[itemIdx].splice(boxIdx, 1);
-  renderItemBoxes(itemIdx);
+function renderPartEntry(bIdx, pIdx, part, items, canRemove) {
+  var optionsHtml = '<option value="">Select part…</option>' +
+    items.map(function(item) {
+      var sel = part.itemCode === item.itemCode ? ' selected' : '';
+      return '<option value="' + item.itemCode + '"' + sel + '>' + item.itemCode + (item.description ? ' — ' + item.description : '') + '</option>';
+    }).join('');
+
+  return '<div class="box-part-entry">' +
+    '<div class="part-select-row">' +
+      '<select class="part-select" onchange="updatePartField(' + bIdx + ',' + pIdx + ',\'itemCode\',this.value)">' + optionsHtml + '</select>' +
+      (canRemove ? '<button class="remove-btn" onclick="removePartFromBox(' + bIdx + ',' + pIdx + ')">✕</button>' : '') +
+    '</div>' +
+    '<div class="part-field-row">' +
+      '<div class="pkg-field">' +
+        '<label>Qty pulled</label>' +
+        '<input type="number" value="' + (part.qty||'') + '" placeholder="0" oninput="updatePartField(' + bIdx + ',' + pIdx + ',\'qty\',this.value)"/>' +
+      '</div>' +
+      '<div class="pkg-field">' +
+        '<label>Weight (lbs)</label>' +
+        '<input type="number" value="' + (part.weight||'') + '" placeholder="0" oninput="updatePartField(' + bIdx + ',' + pIdx + ',\'weight\',this.value)"/>' +
+      '</div>' +
+    '</div>' +
+    '<div class="pkg-photo-field">' +
+      '<label>Photo (optional)</label>' +
+      '<input type="file" accept="image/*" capture="environment" onchange="handleBoxPhotoNew(' + bIdx + ',' + pIdx + ',this)"/>' +
+      '<div class="photo-preview" id="photo-' + bIdx + '-' + pIdx + '">' +
+        (part.photoUrl ? '<img src="' + part.photoUrl + '"/>' : '') +
+      '</div>' +
+    '</div>' +
+  '</div>';
 }
 
-function updateBoxField(itemIdx, boxIdx, field, value) {
-  if (!_pkgBoxes[itemIdx] || !_pkgBoxes[itemIdx][boxIdx]) return;
-  _pkgBoxes[itemIdx][boxIdx][field] = parseFloat(value) || 0;
+function updatePartField(bIdx, pIdx, field, value) {
+  if (!_pkgBoxes[bIdx] || !_pkgBoxes[bIdx].parts[pIdx]) return;
+  _pkgBoxes[bIdx].parts[pIdx][field] = (field === 'qty' || field === 'weight') ? (parseFloat(value) || 0) : value;
 }
 
-function handleBoxPhoto(itemIdx, boxIdx, input) {
+function addPartToBox(bIdx) {
+  if (!_pkgBoxes[bIdx]) return;
+  _pkgBoxes[bIdx].parts.push({ itemCode:'', qty:0, weight:0, photoUrl:null });
+  renderAllBoxes();
+}
+
+function removePartFromBox(bIdx, pIdx) {
+  if (!_pkgBoxes[bIdx] || _pkgBoxes[bIdx].parts.length <= 1) return;
+  _pkgBoxes[bIdx].parts.splice(pIdx, 1);
+  renderAllBoxes();
+}
+
+function addNewBox() {
+  _pkgBoxes.push({ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] });
+  renderAllBoxes();
+  setTimeout(function() {
+    var lastBox = document.getElementById('box-section-' + (_pkgBoxes.length - 1));
+    if (lastBox) lastBox.scrollIntoView({ behavior:'smooth' });
+  }, 100);
+}
+
+function handleBoxPhotoNew(bIdx, pIdx, input) {
   if (!input.files || !input.files[0]) return;
   var reader = new FileReader();
   reader.onload = function(e) {
-    if (!_pkgBoxes[itemIdx]) _pkgBoxes[itemIdx] = [];
-    if (!_pkgBoxes[itemIdx][boxIdx]) _pkgBoxes[itemIdx][boxIdx] = {};
-    _pkgBoxes[itemIdx][boxIdx].photoUrl = e.target.result;
-    var preview = document.getElementById('photo-preview-' + itemIdx + '-' + boxIdx);
+    if (!_pkgBoxes[bIdx] || !_pkgBoxes[bIdx].parts[pIdx]) return;
+    _pkgBoxes[bIdx].parts[pIdx].photoUrl = e.target.result;
+    var preview = document.getElementById('photo-' + bIdx + '-' + pIdx);
     if (preview) preview.innerHTML = '<img src="' + e.target.result + '"/>';
   };
   reader.readAsDataURL(input.files[0]);
 }
 
-function syncBoxesFromDOM() {
-  if (!_currentPkgData) return;
-  (_currentPkgData.items||[]).forEach(function(item, idx) {
-    var boxes = _pkgBoxes[idx] || [];
-    boxes.forEach(function(box, bIdx) {
-      var el = document.getElementById('box-' + idx + '-' + bIdx);
-      if (!el) return;
-      var nums = el.querySelectorAll('input[type="number"]');
-      if (nums[0]) _pkgBoxes[idx][bIdx].qty    = parseFloat(nums[0].value || 0);
-      if (nums[1]) _pkgBoxes[idx][bIdx].weight  = parseFloat(nums[1].value || 0);
-    });
-  });
-}
-
 function collectPackagePayload(complete) {
   if (!_currentPkgData) return null;
-  syncBoxesFromDOM();
-  var h     = _currentPkgData.header;
-  var items = _currentPkgData.items || [];
-  var boxes = [];
-
-  items.forEach(function(item, idx) {
-    var itemBoxes  = _pkgBoxes[idx] || [{}];
-    var totalBoxes = itemBoxes.length;
-    itemBoxes.forEach(function(box, bIdx) {
-      boxes.push({ itemCode:item.itemCode, boxIndex:bIdx+1, totalBoxes:totalBoxes, qtyInBox:box.qty||0, weight:box.weight||0 });
+  var h          = _currentPkgData.header;
+  var totalBoxes = _pkgBoxes.length;
+  var boxes      = [];
+  _pkgBoxes.forEach(function(box, bIdx) {
+    box.parts.forEach(function(part) {
+      if (part.itemCode) {
+        boxes.push({ itemCode:part.itemCode, boxIndex:bIdx+1, totalBoxes:totalBoxes, qtyInBox:parseFloat(part.qty)||0, weight:parseFloat(part.weight)||0 });
+      }
     });
   });
-
   return { orderNumber:h.orderNumber, boxes:boxes, complete:complete };
 }
 
@@ -587,7 +576,6 @@ function savePackageDraft() {
   if (!payload) return;
   var btn = document.getElementById('savePkgBtn');
   btn.disabled = true; btn.textContent = 'Saving…';
-
   apiFetch('savePackageData', payload)
     .then(function(res) {
       btn.disabled = false; btn.textContent = 'Save for later';
@@ -602,19 +590,17 @@ function completeOrder() {
   if (!payload) return;
   var btn = document.getElementById('completePkgBtn');
   btn.disabled = true; btn.textContent = 'Completing…';
-
   apiFetch('savePackageData', payload)
     .then(function(res) {
-      btn.disabled = false; btn.textContent = '✓ Complete order & generate tags';
+      btn.disabled = false; btn.textContent = '✓ Complete order';
       if (res.success) {
-        showToast('Order complete! Generating tags…', 'success');
-        setTimeout(function() { generatePDFTags(); }, 400);
-        setTimeout(exitPackageDetail, 1800);
+        showToast('Order complete!', 'success');
+        setTimeout(exitPackageDetail, 900);
       } else {
         showToast('Error: ' + (res.error||''), 'error');
       }
     })
-    .catch(function() { btn.disabled = false; btn.textContent = '✓ Complete order & generate tags'; showToast('Error', 'error'); });
+    .catch(function() { btn.disabled = false; btn.textContent = '✓ Complete order'; showToast('Error', 'error'); });
 }
 
 function exitPackageDetail() {
@@ -626,75 +612,22 @@ function exitPackageDetail() {
 
 // ── PDF Generation ────────────────────────────────────────
 
-function renderPDFTag(doc, data, photoUrl) {
-  doc.setFillColor(26, 42, 74);
-  doc.rect(0, 0, 100, 13, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(10);
+function renderPDFTag(doc, data) {
+  doc.setTextColor(0, 0, 0);
+
+  // Location — large bold
   doc.setFont(undefined, 'bold');
-  doc.text('ArTek WMS', 50, 9, { align:'center' });
+  doc.setFontSize(16);
+  doc.text(String(data.location || '—'), 8, 18);
 
-  doc.setTextColor(30, 41, 59);
-  var y = 20;
-  var fields = [
-    ['Location', String(data.location || '—')],
-    ['PO',       String(data.po       || '—')],
-    ['Part #',   String(data.partCode || '—')],
-    ['Lot #',    String(data.lotNumber|| '—')],
-    ['Qty',      String(data.qty) + ' ' + String(data.uom||'')],
-    ['Weight',   String(data.weight)  + ' lbs'],
-    ['Package',  'Box ' + data.boxIndex + ' of ' + data.totalBoxes]
-  ];
-
-  fields.forEach(function(f) {
-    doc.setFont(undefined, 'bold');   doc.setFontSize(7.5); doc.text(f[0] + ':', 7, y);
-    doc.setFont(undefined, 'normal'); doc.setFontSize(8);   doc.text(f[1], 32, y);
-    y += 6.5;
-  });
-
-  if (photoUrl) {
-    try { doc.addImage(photoUrl, 'JPEG', 64, 15, 30, 48); } catch(ex) {}
-  }
-
-  doc.setDrawColor(180, 180, 180);
-  doc.setLineWidth(0.4);
-  doc.rect(2, 14, 96, 53);
-}
-
-function generatePDFTags() {
-  if (!_currentPkgData) return;
-  var h     = _currentPkgData.header;
-  var items = _currentPkgData.items || [];
-  var doc   = null;
-
-  try {
-    var jsPDFLib = window.jspdf ? window.jspdf.jsPDF : (window.jsPDF || null);
-    if (!jsPDFLib) { showToast('PDF library not loaded', 'error'); return; }
-
-    items.forEach(function(item, idx) {
-      var itemBoxes = _pkgBoxes[idx] || [{ qty:item.qtyPulled||0, weight:0, photoUrl:null }];
-      itemBoxes.forEach(function(box, bIdx) {
-        if (!doc) {
-          doc = new jsPDFLib({ orientation:'landscape', unit:'mm', format:[100, 70] });
-        } else {
-          doc.addPage([100, 70], 'landscape');
-        }
-        renderPDFTag(doc, {
-          location:   h.location    || '—',
-          po:         h.po          || '—',
-          partCode:   item.itemCode,
-          lotNumber:  item.lotNumber || '—',
-          qty:        box.qty        || 0,
-          uom:        item.uom       || '',
-          weight:     box.weight     || 0,
-          boxIndex:   bIdx + 1,
-          totalBoxes: itemBoxes.length
-        }, box.photoUrl || null);
-      });
-    });
-
-    if (doc) { doc.save('ArTek_Order_' + h.orderNumber + '_tags.pdf'); showToast('PDF tags downloaded!', 'success'); }
-  } catch(e) { showToast('PDF error: ' + e.message, 'error'); }
+  // Indented fields
+  doc.setFont(undefined, 'normal');
+  doc.setFontSize(11);
+  var indent = 14;
+  var y = 30;
+  doc.text('PO: ' + String(data.po || '—'), indent, y);       y += 10;
+  doc.text(String(data.qty||0) + ' ' + String(data.uom||''), indent, y); y += 10;
+  doc.text('Box ' + data.boxIndex + ' of ' + data.totalBoxes, indent, y);
 }
 
 function reprintPDF(orderNo) {
@@ -705,36 +638,40 @@ function reprintPDF(orderNo) {
       var items = data.items  || [];
       var boxes = data.boxes  || {};
 
-      try {
-        var jsPDFLib = window.jspdf ? window.jspdf.jsPDF : (window.jsPDF || null);
-        if (!jsPDFLib) { showToast('PDF library not loaded', 'error'); return; }
-        var doc = null;
+      var itemInfo = {};
+      items.forEach(function(item) { itemInfo[item.itemCode] = item; });
 
-        items.forEach(function(item) {
-          var code      = item.itemCode;
-          var itemBoxes = boxes[code] || [{ boxIndex:1, totalBoxes:1, qtyInBox:item.qtyPulled||0, weight:0 }];
-          itemBoxes.forEach(function(box) {
-            if (!doc) {
-              doc = new jsPDFLib({ orientation:'landscape', unit:'mm', format:[100, 70] });
-            } else {
-              doc.addPage([100, 70], 'landscape');
-            }
-            renderPDFTag(doc, {
-              location:   hdr.location   || '—',
-              po:         hdr.po         || '—',
-              partCode:   code,
-              lotNumber:  item.lotNumber || '—',
-              qty:        box.qtyInBox   || 0,
-              uom:        item.uom       || '',
-              weight:     box.weight     || 0,
-              boxIndex:   box.boxIndex,
-              totalBoxes: box.totalBoxes
-            }, null);
-          });
+      var jsPDFLib = window.jspdf ? window.jspdf.jsPDF : (window.jsPDF || null);
+      if (!jsPDFLib) { showToast('PDF library not loaded', 'error'); return; }
+      var doc = null;
+
+      // Flatten and sort by boxIndex
+      var allEntries = [];
+      Object.keys(boxes).forEach(function(itemCode) {
+        (boxes[itemCode] || []).forEach(function(box) {
+          allEntries.push({ itemCode:itemCode, boxIndex:box.boxIndex, totalBoxes:box.totalBoxes, qtyInBox:box.qtyInBox, weight:box.weight });
         });
+      });
+      allEntries.sort(function(a,b) { return a.boxIndex - b.boxIndex; });
 
-        if (doc) { doc.save('ArTek_Order_' + orderNo + '_tags.pdf'); showToast('PDF reprinted!', 'success'); }
-      } catch(e) { showToast('PDF error: ' + e.message, 'error'); }
+      allEntries.forEach(function(entry) {
+        var info = itemInfo[entry.itemCode] || {};
+        if (!doc) {
+          doc = new jsPDFLib({ orientation:'landscape', unit:'mm', format:[100, 70] });
+        } else {
+          doc.addPage([100, 70], 'landscape');
+        }
+        renderPDFTag(doc, {
+          location:   hdr.location || '—',
+          po:         hdr.po       || '—',
+          qty:        entry.qtyInBox,
+          uom:        info.uom || '',
+          boxIndex:   entry.boxIndex,
+          totalBoxes: entry.totalBoxes
+        });
+      });
+
+      if (doc) { doc.save('ArTek_Order_' + orderNo + '_tags.pdf'); showToast('PDF tags ready!', 'success'); }
     })
     .catch(function() { showToast('Error loading order', 'error'); });
 }
@@ -756,9 +693,7 @@ function loadOOR() {
 function renderOOR() {
   var q = document.getElementById('oorSearch') ? document.getElementById('oorSearch').value.toLowerCase().trim() : '';
   var filtered = _oorData.filter(function(o) {
-    return !q ||
-      String(o.orderNo).toLowerCase().indexOf(q) !== -1 ||
-      String(o.location||'').toLowerCase().indexOf(q) !== -1;
+    return !q || String(o.orderNo).toLowerCase().indexOf(q) !== -1 || String(o.location||'').toLowerCase().indexOf(q) !== -1;
   });
 
   var list = document.getElementById('oorList');
@@ -825,10 +760,7 @@ function renderOORItems(container, items) {
   if (!items || !items.length) { container.innerHTML = '<div class="oor-item-loading">No items found.</div>'; return; }
   container.innerHTML = items.map(function(item) {
     return '<div class="oor-item">' +
-      '<div style="flex:1;min-width:0">' +
-        '<div class="oor-item-code">' + (item.itemCode||'—') + '</div>' +
-        '<div class="oor-item-desc">' + (item.description||'') + '</div>' +
-      '</div>' +
+      '<div style="flex:1;min-width:0"><div class="oor-item-code">' + (item.itemCode||'—') + '</div><div class="oor-item-desc">' + (item.description||'') + '</div></div>' +
       '<div class="oor-item-qty">' + (item.qtyOrdered||0) + ' ' + (item.uom||'') + '</div>' +
     '</div>';
   }).join('');
@@ -848,12 +780,10 @@ function renderOORItemsWithBoxes(container, data) {
         ? '<div class="oor-item-boxes">' +
             itemBoxes.map(function(b) {
               return '<span class="box-tag">Box ' + b.boxIndex + '/' + b.totalBoxes + ': ' + b.qtyInBox + ' ' + (item.uom||'') + ' · ' + b.weight + ' lbs</span>';
-            }).join('') +
-          '</div>'
+            }).join('') + '</div>'
         : '';
       return '<div class="oor-item">' +
-        '<div style="flex:1;min-width:0">' +
-          '<div class="oor-item-code">' + code + '</div>' +
+        '<div style="flex:1;min-width:0"><div class="oor-item-code">' + code + '</div>' +
           (item.lotNumber ? '<div class="oor-item-desc">Lot: ' + item.lotNumber + '</div>' : '') +
           boxHtml +
         '</div>' +
@@ -861,7 +791,7 @@ function renderOORItemsWithBoxes(container, data) {
       '</div>';
     }).join('') +
     '<div style="padding:10px 16px">' +
-      '<button class="reprint-btn" onclick="reprintPDF(\'' + (header.orderNumber||'') + '\')">🖨 Reprint PDF tags</button>' +
+      '<button class="reprint-btn" onclick="reprintPDF(\'' + (header.orderNumber||'') + '\')">🖨 Print tags</button>' +
     '</div>';
 }
 
