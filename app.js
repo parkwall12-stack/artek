@@ -501,7 +501,7 @@ function renderPartEntry(bIdx, pIdx, part, items, canRemove) {
     '</div>' +
     '<div class="part-field-row">' +
       '<div class="pkg-field">' +
-        '<label>Qty pulled</label>' +
+        '<label>Qty (Feet)</label>' +
         '<input type="number" value="' + (part.qty||'') + '" placeholder="0" oninput="updatePartField(' + bIdx + ',' + pIdx + ',\'qty\',this.value)"/>' +
       '</div>' +
       '<div class="pkg-field">' +
@@ -510,13 +510,13 @@ function renderPartEntry(bIdx, pIdx, part, items, canRemove) {
       '</div>' +
     '</div>' +
     '<div class="pkg-photo-field">' +
-      '<label>Photo (optional)</label>' +
-      '<input type="file" accept="image/*" capture="environment" onchange="handleBoxPhotoNew(' + bIdx + ',' + pIdx + ',this)"/>' +
-      '<div class="photo-preview" id="photo-' + bIdx + '-' + pIdx + '">' +
-        (part.photoUrl ? '<img src="' + part.photoUrl + '"/>' : '') +
-      '</div>' +
-    '</div>' +
-  '</div>';
+  '<input type="file" accept="image/*" capture="environment" id="photo-input-' + bIdx + '-' + pIdx + '" style="display:none" onchange="handleBoxPhotoNew(' + bIdx + ',' + pIdx + ',this)"/>' +
+  '<button class="photo-btn" onclick="document.getElementById(\'photo-input-' + bIdx + '-' + pIdx + '\').click()">📷 Take photo</button>' +
+  '<div class="photo-preview" id="photo-' + bIdx + '-' + pIdx + '">' +
+    (part.photoUrl ? '<img src="' + part.photoUrl + '"/>' : '') +
+  '</div>' +
+'</div>';
+  
 }
 
 function updatePartField(bIdx, pIdx, field, value) {
