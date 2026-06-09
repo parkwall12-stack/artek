@@ -24,6 +24,31 @@
     <button onclick="pcCheck()" style="width:160px;height:46px;border-radius:10px;border:none;background:#3b82f6;color:#fff;font-size:1rem;font-weight:600;cursor:pointer;font-family:'Segoe UI',sans-serif;">Enter</button>
     <p id="pcError" style="color:#ef4444;font-size:.85rem;font-family:'Segoe UI',sans-serif;min-height:20px;"></p>
   </div>
+<script>
+  var PASSCODE = '1234'; // change to your code
+
+  function pcCheck() {
+    var input = document.getElementById('pcInput');
+    if (!input) return;
+    if (input.value === PASSCODE) {
+      document.getElementById('passcodeScreen').style.display = 'none';
+      sessionStorage.setItem('artek-auth', '1');
+    } else {
+      document.getElementById('pcError').textContent = 'Incorrect passcode';
+      input.value = '';
+      setTimeout(function() { document.getElementById('pcError').textContent = ''; }, 2000);
+      input.focus();
+    }
+  }
+
+  if (sessionStorage.getItem('artek-auth') === '1') {
+    document.addEventListener('DOMContentLoaded', function() {
+      var s = document.getElementById('passcodeScreen');
+      if (s) s.style.display = 'none';
+    });
+  }
+</script>
+
 
   <header class="header">
     <div class="header-logo">
