@@ -415,8 +415,31 @@ function showPickPhase(data) {
   }).join('');
 }
 
-function autofillLot(idx) { showToast('Autofill lot — coming soon', 'info'); }
+function autofillLot(idx) {
+  if (!_currentPickData) return;
+  var items = _currentPickData.items || [];
+  var item  = items[idx];
+  if (!item) return;
 
+  var btn = document.querySelector('[onclick="autofillLot(' + idx + ')"]');
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+
+  apiFetch('getLotNumber', { partCode: extractPartCode(item.itemCode) })
+    .then(function(res) {
+      if (btn) { btn.disabled = false; btn.textContent = '⟳'; }
+      if (res && res.lotNumber) {
+        var input = document.getElementById('pick-lot-' + idx);
+        if (input) { input.value = res.lotNumber; }
+        showToast('Lot # filled: ' + res.lotNumber, 'success');
+      } else {
+        showToast('No lot number found for this part', 'error');
+      }
+    })
+    .catch(function() {
+      if (btn) { btn.disabled = false; btn.textContent = '⟳'; }
+      showToast('Error looking up lot number', 'error');
+    });
+}
 function backToLookup() {
   document.getElementById('phase-lookup').style.display = 'block';
   document.getElementById('phase-pick').style.display   = 'none';
