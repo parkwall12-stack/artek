@@ -424,8 +424,6 @@ function openPackageOrder(orderNo) {
       if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
       _currentPkgData = data;
 
-      // Reconstruct box-centric structure from saved flat data
-      // data.boxes = { itemCode: [{boxIndex, totalBoxes, qtyInBox, weight}] }
       var byBox = {};
       Object.keys(data.boxes || {}).forEach(function(itemCode) {
         (data.boxes[itemCode] || []).forEach(function(box) {
@@ -435,10 +433,16 @@ function openPackageOrder(orderNo) {
       });
 
       var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
+
       if (boxIdxs.length > 0) {
+        // Has saved box data — restore it
         _pkgBoxes = boxIdxs.map(function(bIdx) { return { parts: byBox[bIdx] }; });
       } else {
-        _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
+        // No box data yet — pre-populate Box 1 with all picked items
+        var preParts = (data.items || []).map(function(item) {
+          return { itemCode: item.itemCode, qty: item.qtyPulled || 0, weight: 0, photoUrl: null };
+        });
+        _pkgBoxes = [{ parts: preParts.length > 0 ? preParts : [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
       }
 
       renderPackageDetail(data);
