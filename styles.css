@@ -146,7 +146,7 @@ body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:
 .box-section-title  { font-size:1rem; font-weight:700; color:var(--navy); }
 .box-part-entry { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px; margin-bottom:10px; }
 .part-select-row { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
-.part-select { flex:1; height:38px; padding:0 10px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:.85rem; outline:none; }
+.part-select { flex:1; height:38px; padding:0 10px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:.85rem; outline:none; max-width:100%; min-width:0; }
 .part-select:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(59,130,246,.12); }
 .part-field-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }
 .pkg-field label { display:block; font-size:.72rem; font-weight:600; color:var(--muted); margin-bottom:4px; }
@@ -157,8 +157,8 @@ body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:
 .photo-preview { margin-top:6px; }
 .photo-preview img { max-width:100%; border-radius:var(--radius); border:1px solid var(--border); }
 .box-action-row { display:flex; gap:8px; margin-top:10px; }
-.add-part-to-box-btn { height:36px; padding:0 14px; border-radius:var(--radius); border:1.5px dashed var(--border); background:transparent; color:var(--muted); cursor:pointer; font-size:.85rem; transition:background .15s, color .15s; }
-.add-part-to-box-btn:hover { background:var(--surface); color:var(--text); }
+.add-part-to-box-btn { height:36px; padding:0 14px; border-radius:var(--radius); border:none; background:var(--navy); color:#fff; cursor:pointer; font-size:.85rem; font-weight:600; transition:background .15s; }
+.add-part-to-box-btn:hover { background:var(--navy-light); }
 .add-new-box-btn { height:36px; padding:0 14px; border-radius:var(--radius); border:none; background:var(--navy); color:#fff; cursor:pointer; font-size:.85rem; font-weight:600; transition:background .15s; }
 .add-new-box-btn:hover { background:var(--navy-light); }
 .remove-btn { height:28px; width:28px; border-radius:var(--radius); border:none; background:transparent; color:var(--muted); cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; transition:background .15s, color .15s; flex-shrink:0; }
