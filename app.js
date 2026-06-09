@@ -405,7 +405,7 @@ function showPickPhase(data) {
       '<div class="pick-scan-row">' +
         '<input type="text" id="pick-lot-' + idx + '" placeholder="Scan or type lot #" autocomplete="off"/>' +
         '<button class="scan-btn" onclick="openScanner(\'pick-lot-' + idx + '\')">&#9641;</button>' +
-        '<button class="autofill-btn" onclick="autofillLot(' + idx + ')" title="Autofill lot number">⟳</button>' +
+        '<button class="autofill-btn" id="autofill-btn-' + idx + '" onclick="autofillLot(' + idx + ')" title="Autofill lot number">⟳</button>' +
       '</div>' +
       '<div class="pick-qty-row">' +
         '<label>Pieces pulled</label>' +
@@ -421,10 +421,13 @@ function autofillLot(idx) {
   var item  = items[idx];
   if (!item) return;
 
-  var btn = document.querySelector('[onclick="autofillLot(' + idx + ')"]');
+  var btnId = 'autofill-btn-' + idx;
+  var btn   = document.getElementById(btnId);
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
 
-  apiFetch('getLotNumber', { partCode: extractPartCode(item.itemCode) })
+  var partCode = extractPartCode(item.itemCode);
+
+  apiFetch('getLotNumber', { partCode: partCode })
     .then(function(res) {
       if (btn) { btn.disabled = false; btn.textContent = '⟳'; }
       if (res && res.lotNumber) {
@@ -588,7 +591,10 @@ function renderBoxSection(box, bIdx, items, isLast) {
     return renderPartEntry(bIdx, pIdx, part, items, box.parts.length > 1);
   }).join('');
   return '<div class="box-section" id="box-section-' + bIdx + '">' +
-    '<div class="box-section-header"><span class="box-section-title">Box ' + (bIdx + 1) + '</span></div>' +
+    '<div class="box-section-header">' +
+      '<span class="box-section-title">Box ' + (bIdx + 1) + '</span>' +
+      (bIdx > 0 ? '<button class="delete-box-btn" onclick="deleteBox(' + bIdx + ')">✕ Remove box</button>' : '') +
+    '</div>' +
     '<div id="box-' + bIdx + '-parts">' + partsHtml + '</div>' +
     '<div class="box-action-row">' +
       '<button class="add-part-to-box-btn" onclick="addPartToBox(' + bIdx + ')">+ Add part to box</button>' +
@@ -648,6 +654,12 @@ function addNewBox() {
     var lastBox = document.getElementById('box-section-' + (_pkgBoxes.length - 1));
     if (lastBox) lastBox.scrollIntoView({ behavior:'smooth' });
   }, 100);
+}
+
+function deleteBox(bIdx) {
+  if (bIdx === 0 || !_pkgBoxes[bIdx]) return;
+  _pkgBoxes.splice(bIdx, 1);
+  renderAllBoxes();
 }
 
 function handleBoxPhotoNew(bIdx, pIdx, input) {
@@ -740,50 +752,48 @@ function exitPackageDetail() {
 
 function renderPDFTag(doc, data) {
   doc.setTextColor(0, 0, 0);
-  var x = 8; var y = 14; var lineH = 9;
+  var x = 8; var y = 18; var gap = 14;
 
-  // Line 1: McMaster-Carr / MCMXXX
-  doc.setFont(undefined, 'bold'); doc.setFontSize(12);
-  doc.text('McMaster-Carr / ' + String(data.location || '—'), x, y); y += lineH;
+  // McMaster-Carr / LOCATION
+  doc.setFont(undefined, 'bold'); doc.setFontSize(13);
+  doc.text('McMaster-Carr', x, y); y += 10;
+  doc.text(String(data.location || '—'), x, y); y += gap;
 
-  doc.setFont(undefined, 'normal'); doc.setFontSize(10);
+  doc.setFont(undefined, 'normal'); doc.setFontSize(11);
 
-  // Line 2: P.O. #
-  doc.text('P.O. # ' + String(data.po || '—'), x, y); y += lineH;
+  // P.O. #
+  doc.text('P.O. # ' + String(data.po || '—'), x, y); y += gap;
 
-  // Line 3: LOT #
-  doc.text('LOT # ' + String(data.lotNumber || '—'), x, y); y += lineH;
+  // LOT #
+  doc.text('LOT # ' + String(data.lotNumber || '—'), x, y); y += gap;
 
-  // Line 4: Part #:
-  doc.text('Part #:', x, y); y += 7;
-
-  // Line 5: part code (bold, smaller to fit long codes)
+  // Part #
+  doc.text('Part #:', x, y); y += 9;
   doc.setFont(undefined, 'bold'); doc.setFontSize(9);
-  doc.text(String(data.partCode || '—'), x, y); y += 8;
+  doc.text(String(data.partCode || '—'), x, y); y += gap;
 
-  // Line 6: QTY
-  doc.setFont(undefined, 'normal'); doc.setFontSize(10);
-  doc.text('QTY: ' + String(data.qty || 0) + ' ' + String(data.uom || 'Feet'), x, y); y += lineH;
+  // QTY
+  doc.setFont(undefined, 'normal'); doc.setFontSize(11);
+  doc.text('QTY: ' + String(data.qty || 0) + ' ' + String(data.uom || 'Feet'), x, y); y += gap;
 
-  // Line 7: Pkg
+  // Pkg
   doc.text('Pkg: ' + data.boxIndex + ' of ' + data.totalBoxes, x, y);
 }
-
 function generatePDFBase64() {
   var jsPDFLib = window.jspdf ? window.jspdf.jsPDF : (window.jsPDF || null);
   if (!jsPDFLib || !_currentPkgData) return null;
-  var h = _currentPkgData.header;
-  var items = _currentPkgData.items || [];
-  var itemInfo = {};
+  var h         = _currentPkgData.header;
+  var items     = _currentPkgData.items || [];
+  var itemInfo  = {};
   items.forEach(function(item) { itemInfo[item.itemCode] = item; });
-  var doc = null;
+  var doc        = null;
   var totalBoxes = _pkgBoxes.length;
   _pkgBoxes.forEach(function(box, bIdx) {
     box.parts.forEach(function(part) {
       if (!part.itemCode) return;
       var info = itemInfo[part.itemCode] || {};
-      if (!doc) { doc = new jsPDFLib({ orientation:'landscape', unit:'mm', format:[100, 70] }); }
-      else { doc.addPage([100, 70], 'landscape'); }
+      if (!doc) { doc = new jsPDFLib({ orientation:'portrait', unit:'mm', format:[101.6, 152.4] }); }
+      else       { doc.addPage([101.6, 152.4], 'portrait'); }
       renderPDFTag(doc, {
         location:   h.location || '—',
         po:         h.po || '—',
@@ -799,7 +809,6 @@ function generatePDFBase64() {
   if (!doc) return null;
   return doc.output('datauristring').split(',')[1];
 }
-
 function collectPhotos() {
   var photos = [];
   _pkgBoxes.forEach(function(box, bIdx) {
@@ -846,8 +855,8 @@ function reprintPDF(orderNo) {
       var doc = null;
       allEntries.forEach(function(entry) {
         var info = itemInfo[entry.itemCode] || {};
-        if (!doc) { doc = new jsPDFLib({ orientation:'landscape', unit:'mm', format:[100, 70] }); }
-        else { doc.addPage([100, 70], 'landscape'); }
+        if (!doc) { doc = new jsPDFLib({ orientation:'portrait', unit:'mm', format:[101.6, 152.4] }); }
+        else       { doc.addPage([101.6, 152.4], 'portrait'); }
         renderPDFTag(doc, {
           location:   hdr.location || '—',
           po:         hdr.po || '—',
@@ -864,7 +873,6 @@ function reprintPDF(orderNo) {
     })
     .catch(function() { showToast('Error loading order', 'error'); });
 }
-
 // ── OOR ───────────────────────────────────────────────────
 
 function loadOOR() {
