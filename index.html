@@ -48,16 +48,13 @@
 
   <!-- NEW ORDER PAGE -->
   <div class="page" id="page-new-order">
-
-    <!-- PHASE 1: LOOKUP -->
     <div id="phase-lookup">
       <div class="page-header">
         <div><h1>Scan order</h1><p class="page-sub">Enter or scan an OOR order number.</p></div>
       </div>
       <div class="section-label">Order number</div>
       <div class="field-row">
-        <input type="text" id="orderNumber" placeholder="e.g. 242477" autocomplete="off"
-          onkeydown="if(event.key==='Enter') lookupOrder()"/>
+        <input type="text" id="orderNumber" placeholder="e.g. 242477" autocomplete="off" onkeydown="if(event.key==='Enter') lookupOrder()"/>
         <button class="scan-btn" onclick="openScanner('orderNumber')">&#9641;</button>
       </div>
       <div class="lookup-error" id="lookupError" style="display:none"></div>
@@ -65,15 +62,11 @@
         <button class="btn-exit" onclick="exitForm()">Exit</button>
         <button class="btn-save" id="lookupBtn" onclick="lookupOrder()">Look up order</button>
       </div>
-
-      <!-- Session picks list -->
       <div id="sessionPicksWrap" style="display:none; margin-top:28px;">
         <div class="section-label">Picked this session</div>
         <div id="sessionPicksList"></div>
       </div>
     </div>
-
-    <!-- PHASE 2: PICK -->
     <div id="phase-pick" style="display:none">
       <div class="pick-order-header" id="pickOrderHeader"></div>
       <div id="pickItemsList"></div>
@@ -81,6 +74,17 @@
         <button class="btn-exit" onclick="backToLookup()">Back</button>
         <button class="btn-save" id="savePickBtn" onclick="savePick()">Save pick</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ORDER DETAIL (read-only) -->
+  <div class="page" id="page-order-detail">
+    <div class="page-header">
+      <div><h1>Order details</h1></div>
+    </div>
+    <div id="detailContent"></div>
+    <div class="footer-actions" style="margin-top:24px">
+      <button class="btn-exit" onclick="exitOrderDetail()">Back</button>
     </div>
   </div>
 
@@ -103,7 +107,7 @@
       <button class="btn-exit" onclick="exitPackageDetail()">Back</button>
       <button class="btn-save" id="savePkgBtn" onclick="savePackageDraft()">Save for later</button>
     </div>
-    <button class="btn-complete" id="completePkgBtn" onclick="completeOrder()">✓ Complete order &amp; generate tags</button>
+    <button class="btn-complete" id="completePkgBtn" onclick="completeOrder()">✓ Complete order</button>
   </div>
 
   <!-- OOR TAB -->
