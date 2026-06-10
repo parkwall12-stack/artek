@@ -544,7 +544,7 @@ function openPackageOrder(orderNo) {
       });
       var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
 
-      if (boxIdxs.length > 0 && data.header.status === 'Packaging') {
+      if (boxIdxs.length > 0) {
         // Restore saved progress
         _pkgBoxes = boxIdxs.map(function(bIdx) { return { parts: byBox[bIdx] }; });
       } else {
