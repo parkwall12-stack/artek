@@ -549,15 +549,19 @@ function openPackageOrder(orderNo) {
   document.getElementById('pkgItemsList').innerHTML = '';
 
   apiFetch('getPackageOrder', { orderNo: String(orderNo) })
-    .then(function(data) {
-      if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
-      _currentPkgData = data;
-      var byBox = {};
-      Object.keys(data.boxes || {}).forEach(function(itemCode) {
-        (data.boxes[itemCode] || []).forEach(function(box) {
-          if (!byBox[box.boxIndex]) byBox[box.boxIndex] = [];
-          byBox[box.boxIndex].push({ itemCode:itemCode, qty:box.qtyInBox||0, weight:box.weight||0, photoUrl:null });
-        });
+  .then(function(data) {
+    if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
+    _currentPkgData = data;
+
+    // Always start fresh with one blank box
+    _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
+
+    renderPackageDetail(data);
+  })
+  .catch(function(err) {
+    console.error('openPackageOrder error:', err);
+    showToast('Error loading order', 'error');
+  });
       });
       var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
       if (boxIdxs.length > 0) {
