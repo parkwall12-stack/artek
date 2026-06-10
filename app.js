@@ -434,6 +434,8 @@ function autofillLot(idx) {
         var input = document.getElementById('pick-lot-' + idx);
         if (input) { input.value = res.lotNumber; }
         showToast('Lot # filled: ' + res.lotNumber, 'success');
+      } else if (res && res.error) {
+        showToast('Lot error: ' + res.error, 'error');
       } else {
         showToast('No lot number found for this part', 'error');
       }
