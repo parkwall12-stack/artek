@@ -196,6 +196,8 @@ body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:
 .scanner-status.error   { color:#ef4444; }
 .scanner-close { margin-top:16px; height:44px; padding:0 28px; border-radius:8px; border:1px solid rgba(255,255,255,0.25); background:transparent; color:#fff; font-size:.9rem; cursor:pointer; }
 .scanner-close:hover { background:rgba(255,255,255,0.1); }
+.detail-item-boxes { margin:4px 0 6px; }
+.detail-photos { margin-top:10px; display:flex; flex-direction:column; gap:8px; }
 
 /* ── Toast ───────────────────────────────────── */
 .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(60px); background:var(--navy); color:#fff; padding:11px 22px; border-radius:var(--radius); font-size:.88rem; opacity:0; transition:all .3s; pointer-events:none; white-space:nowrap; z-index:999; }
