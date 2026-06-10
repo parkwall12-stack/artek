@@ -236,20 +236,9 @@ function renderOrderDetail(data, photos) {
   var boxes = data.boxes || {};
   photos    = photos || [];
 
+  // Photo lookup: "boxIdx|partCode" → thumbnailUrl
   var photoLookup = {};
   photos.forEach(function(p) { photoLookup[p.boxIdx + '|' + p.partCode] = p.thumbnailUrl; });
-
-  var itemInfo = {};
-  items.forEach(function(item) { itemInfo[item.itemCode] = item; });
-
-  var byBox = {};
-  Object.keys(boxes).forEach(function(itemCode) {
-    (boxes[itemCode] || []).forEach(function(box) {
-      if (!byBox[box.boxIndex]) byBox[box.boxIndex] = [];
-      byBox[box.boxIndex].push({ itemCode:itemCode, qtyInBox:box.qtyInBox, weight:box.weight, totalBoxes:box.totalBoxes });
-    });
-  });
-  var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
 
   var statusBadge = h.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>'  :
                     h.status === 'Packaging'  ? '<span class="badge badge-inprog">Packaging</span>'   :
@@ -257,43 +246,48 @@ function renderOrderDetail(data, photos) {
 
   var bodyHtml = '';
 
-  if (boxIdxs.length === 0) {
-    bodyHtml = '<div class="detail-box-section"><div class="detail-box-title">Picked items</div>';
-    if (items.length === 0) {
-      bodyHtml += '<p style="color:#94a3b8;font-size:.85rem;padding:8px 0">No items found.</p>';
-    }
+  if (items.length === 0) {
+    bodyHtml = '<div class="detail-box-section"><p style="color:#94a3b8;font-size:.85rem;padding:8px 0">No items found.</p></div>';
+  } else {
     items.forEach(function(item) {
+      var itemBoxes = boxes[item.itemCode] || [];
+
+      // Collect photos for this item across all boxes
+      var photoHtml = '';
+      itemBoxes.forEach(function(box) {
+        var thumbUrl = photoLookup[box.boxIndex + '|' + item.itemCode];
+        if (thumbUrl) {
+          photoHtml += '<img src="' + thumbUrl + '" class="detail-photo"/>';
+        }
+      });
+
+      // Box breakdown
+      var boxHtml = '';
+      if (itemBoxes.length > 0) {
+        boxHtml = '<div class="detail-item-boxes">';
+        itemBoxes.forEach(function(box) {
+          boxHtml += '<div class="detail-item-row">' +
+            '<span>Box ' + box.boxIndex + ' of ' + box.totalBoxes + '</span>' +
+            '<strong>' + box.qtyInBox + ' ' + (item.uom||'ft') + ' · ' + box.weight + ' lbs</strong>' +
+          '</div>';
+        });
+        boxHtml += '</div>';
+      }
+
       bodyHtml += '<div class="detail-part-entry">' +
         '<div class="detail-item-code">' + item.itemCode + '</div>' +
         (item.description ? '<div class="detail-item-desc">' + item.description + '</div>' : '') +
         '<div class="detail-item-row"><span>Lot #</span><strong>' + (item.lotNumber || '—') + '</strong></div>' +
-        '<div class="detail-item-row"><span>Pieces pulled</span><strong>' + item.qtyPulled + ' ' + item.uom + '</strong></div>' +
-        '<div class="detail-item-row"><span>Required</span><strong>' + item.qtyRequired + ' ' + item.uom + '</strong></div>' +
-        '<div class="detail-item-row"><span>Match</span><strong>' + (item.match ? '✓ Yes' : '✗ No') + '</strong></div>' +
+        '<div class="detail-item-row"><span>Pieces pulled</span><strong>' + item.qtyPulled + ' ' + (item.uom||'') + '</strong></div>' +
+        boxHtml +
+        (photoHtml ? '<div class="detail-photos">' + photoHtml + '</div>' : '') +
       '</div>';
     });
-    bodyHtml += '</div>';
-    bodyHtml += '<button class="btn-save" style="width:100%;margin-top:4px" onclick="openPackageOrder(\'' + h.orderNumber + '\')">Open in Packaging →</button>';
-  } else {
-    boxIdxs.forEach(function(bIdx) {
-      var parts = byBox[bIdx];
-      bodyHtml += '<div class="detail-box-section"><div class="detail-box-title">Box ' + bIdx + '</div>';
-      parts.forEach(function(part) {
-        var info     = itemInfo[part.itemCode] || {};
-        var thumbUrl = photoLookup[bIdx + '|' + part.itemCode];
-        bodyHtml += '<div class="detail-part-entry">' +
-          '<div class="detail-item-code">' + part.itemCode + '</div>' +
-          (info.description ? '<div class="detail-item-desc">' + info.description + '</div>' : '') +
-          '<div class="detail-item-row"><span>Lot #</span><strong>' + (info.lotNumber || '—') + '</strong></div>' +
-          '<div class="detail-item-row"><span>Qty</span><strong>' + part.qtyInBox + ' ' + (info.uom || 'ft') + '</strong></div>' +
-          '<div class="detail-item-row"><span>Weight</span><strong>' + part.weight + ' lbs</strong></div>' +
-          (thumbUrl ? '<img src="' + thumbUrl + '" class="detail-photo"/>' : '') +
-        '</div>';
-      });
-      bodyHtml += '</div>';
-    });
-    bodyHtml += '<button class="reprint-btn" style="margin-top:4px" onclick="reprintPDF(\'' + h.orderNumber + '\')">🖨 Print tags</button>';
   }
+
+  var actionHtml = h.status !== 'Complete'
+    ? '<button class="btn-save" style="width:100%;margin-top:12px" onclick="openPackageOrder(\'' + h.orderNumber + '\')">Open in Packaging →</button>'
+    : '<button class="reprint-btn" style="margin-top:12px" onclick="reprintPDF(\'' + h.orderNumber + '\')">🖨 Print tags</button>';
 
   document.getElementById('detailContent').innerHTML =
     '<div class="pick-order-header">' +
@@ -302,9 +296,10 @@ function renderOrderDetail(data, photos) {
         '<span class="pick-order-po">PO: ' + (h.po||'—') + '</span>' +
         ' &nbsp;·&nbsp; ' + (h.location||'—') +
       '</div>' +
-    '</div>' + bodyHtml;
+    '</div>' +
+    '<div class="detail-box-section">' + bodyHtml + '</div>' +
+    actionHtml;
 }
-
 function exitOrderDetail() {
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   var returnTab = _pkgReturnTab || 'scan';
