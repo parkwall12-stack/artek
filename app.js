@@ -254,6 +254,14 @@ function renderOrderDetail(data, photos) {
   });
   var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
 
+if (boxIdxs.length > 0 && data.header.status === 'Packaging') {
+  // Only restore saved box data if explicitly saved for later
+  _pkgBoxes = boxIdxs.map(function(bIdx) { return { parts: byBox[bIdx] }; });
+} else {
+  // Fresh start — one blank entry regardless of how many items were picked
+  _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
+}
+
   var statusBadge = h.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>'  :
                     h.status === 'Packaging'  ? '<span class="badge badge-inprog">Packaging</span>'   :
                     '<span class="badge badge-ready">Picked</span>';
