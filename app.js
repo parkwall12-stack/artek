@@ -220,8 +220,8 @@ function openOrderDetail(orderNo) {
   document.getElementById('detailContent').innerHTML = '<p style="color:#94a3b8;text-align:center;padding:40px">Loading…</p>';
 
   Promise.all([
-    apiFetch('getPackageOrder',  { orderNo: String(orderNo) }),
-    apiFetch('getBoxPhotos',     { orderNo: String(orderNo) })
+    apiFetch('getPackageOrder', { orderNo: String(orderNo) }),
+    apiFetch('getBoxPhotos',    { orderNo: String(orderNo) })
   ]).then(function(results) {
     var data   = results[0];
     var photos = results[1] || [];
@@ -231,20 +231,17 @@ function openOrderDetail(orderNo) {
 }
 
 function renderOrderDetail(data, photos) {
-  var h      = data.header;
-  var items  = data.items  || [];
-  var boxes  = data.boxes  || {};
-  photos     = photos || [];
+  var h     = data.header;
+  var items = data.items || [];
+  var boxes = data.boxes || {};
+  photos    = photos || [];
 
-  // Photo lookup: "boxIdx|partCode" → thumbnailUrl
   var photoLookup = {};
   photos.forEach(function(p) { photoLookup[p.boxIdx + '|' + p.partCode] = p.thumbnailUrl; });
 
-  // Item info lookup
   var itemInfo = {};
   items.forEach(function(item) { itemInfo[item.itemCode] = item; });
 
-  // Build box-centric view
   var byBox = {};
   Object.keys(boxes).forEach(function(itemCode) {
     (boxes[itemCode] || []).forEach(function(box) {
@@ -254,14 +251,6 @@ function renderOrderDetail(data, photos) {
   });
   var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
 
-if (boxIdxs.length > 0 && data.header.status === 'Packaging') {
-  // Only restore saved box data if explicitly saved for later
-  _pkgBoxes = boxIdxs.map(function(bIdx) { return { parts: byBox[bIdx] }; });
-} else {
-  // Fresh start — one blank entry regardless of how many items were picked
-  _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
-}
-
   var statusBadge = h.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>'  :
                     h.status === 'Packaging'  ? '<span class="badge badge-inprog">Packaging</span>'   :
                     '<span class="badge badge-ready">Picked</span>';
@@ -269,9 +258,7 @@ if (boxIdxs.length > 0 && data.header.status === 'Packaging') {
   var bodyHtml = '';
 
   if (boxIdxs.length === 0) {
-    // Picked/no boxes yet — show scan items
-    bodyHtml = '<div class="detail-box-section">' +
-      '<div class="detail-box-title">Picked items</div>';
+    bodyHtml = '<div class="detail-box-section"><div class="detail-box-title">Picked items</div>';
     if (items.length === 0) {
       bodyHtml += '<p style="color:#94a3b8;font-size:.85rem;padding:8px 0">No items found.</p>';
     }
@@ -290,8 +277,7 @@ if (boxIdxs.length > 0 && data.header.status === 'Packaging') {
   } else {
     boxIdxs.forEach(function(bIdx) {
       var parts = byBox[bIdx];
-      bodyHtml += '<div class="detail-box-section">' +
-        '<div class="detail-box-title">Box ' + bIdx + '</div>';
+      bodyHtml += '<div class="detail-box-section"><div class="detail-box-title">Box ' + bIdx + '</div>';
       parts.forEach(function(part) {
         var info     = itemInfo[part.itemCode] || {};
         var thumbUrl = photoLookup[bIdx + '|' + part.itemCode];
@@ -324,7 +310,7 @@ function exitOrderDetail() {
   var returnTab = _pkgReturnTab || 'scan';
   document.getElementById('tab-' + returnTab).classList.add('active');
   document.getElementById('page-' + returnTab).classList.add('active');
-  if (returnTab === 'scan')    loadOrders();
+  if (returnTab === 'scan')     loadOrders();
   else if (returnTab === 'oor') loadOOR();
   else                          loadPackageOrders();
   _pkgReturnTab = null;
@@ -428,19 +414,14 @@ function autofillLot(idx) {
   var items = _currentPickData.items || [];
   var item  = items[idx];
   if (!item) return;
-
-  var btnId = 'autofill-btn-' + idx;
-  var btn   = document.getElementById(btnId);
+  var btn = document.getElementById('autofill-btn-' + idx);
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
-
-  var partCode = extractPartCode(item.itemCode);
-
-  apiFetch('getLotNumber', { partCode: partCode })
+  apiFetch('getLotNumber', { partCode: extractPartCode(item.itemCode) })
     .then(function(res) {
       if (btn) { btn.disabled = false; btn.textContent = '⟳'; }
       if (res && res.lotNumber) {
         var input = document.getElementById('pick-lot-' + idx);
-        if (input) { input.value = res.lotNumber; }
+        if (input) input.value = res.lotNumber;
         showToast('Lot # filled: ' + res.lotNumber, 'success');
       } else if (res && res.error) {
         showToast('Lot error: ' + res.error, 'error');
@@ -453,6 +434,7 @@ function autofillLot(idx) {
       showToast('Error looking up lot number', 'error');
     });
 }
+
 function backToLookup() {
   document.getElementById('phase-lookup').style.display = 'block';
   document.getElementById('phase-pick').style.display   = 'none';
@@ -474,7 +456,7 @@ function savePick() {
       var lotNumber    = (document.getElementById('pick-lot-'  + idx)||{}).value || '';
       var qtyPulled    = parseFloat((document.getElementById('pick-qty-' + idx)||{}).value || 0);
       var match        = extractMiddleCode(scannedCode) === extractMiddleCode(expectedCode);
-      return { expectedCode, description:item.description||'', uom:item.uom||'', lotNumber, qtyRequired:item.qtyOrdered, qtyPulled, match };
+      return { expectedCode:expectedCode, description:item.description||'', uom:item.uom||'', lotNumber:lotNumber, qtyRequired:item.qtyOrdered, qtyPulled:qtyPulled, match:match };
     })
   };
   btn.disabled = true; btn.textContent = 'Saving…';
@@ -538,7 +520,7 @@ function renderPackageList(orders) {
   }).join('');
 }
 
-// ── Package order detail (edit mode) ─────────────────────
+// ── Package order detail ──────────────────────────────────
 
 function openPackageOrder(orderNo) {
   _pkgReturnTab = document.querySelector('.tab-btn.active') ? document.querySelector('.tab-btn.active').id.replace('tab-','') : 'package';
@@ -549,31 +531,17 @@ function openPackageOrder(orderNo) {
   document.getElementById('pkgItemsList').innerHTML = '';
 
   apiFetch('getPackageOrder', { orderNo: String(orderNo) })
-  .then(function(data) {
-    if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
-    _currentPkgData = data;
-
-    // Always start fresh with one blank box
-    _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
-
-    renderPackageDetail(data);
-  })
-  .catch(function(err) {
-    console.error('openPackageOrder error:', err);
-    showToast('Error loading order', 'error');
-  });
-      });
-      var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
-      if (boxIdxs.length > 0) {
-        _pkgBoxes = boxIdxs.map(function(bIdx) { return { parts: byBox[bIdx] }; });
-      } else if (data.items && data.items.length > 0) {
-        _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
-      } else {
-        _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
-      }
+    .then(function(data) {
+      if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
+      _currentPkgData = data;
+      // Always start with one blank box — user selects parts manually
+      _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
       renderPackageDetail(data);
     })
-    .catch(function(err) { console.error('openPackageOrder error:', err); showToast('Error loading order', 'error'); });
+    .catch(function(err) {
+      console.error('openPackageOrder error:', err);
+      showToast('Error loading order', 'error');
+    });
 }
 
 function renderPackageDetail(data) {
@@ -726,7 +694,6 @@ function completeOrder() {
     .then(function(res) {
       btn.disabled = false; btn.textContent = '✓ Complete order';
       if (res.success) {
-        // Generate PDF and collect photos for Drive
         var pdfBase64 = generatePDFBase64();
         var photos    = collectPhotos();
         var h         = _currentPkgData.header;
@@ -767,38 +734,26 @@ function exitPackageDetail() {
 function renderPDFTag(doc, data) {
   doc.setTextColor(0, 0, 0);
   var x = 8; var y = 18; var gap = 14;
-
-  // McMaster-Carr / LOCATION
   doc.setFont(undefined, 'bold'); doc.setFontSize(13);
   doc.text('McMaster-Carr', x, y); y += 10;
   doc.text(String(data.location || '—'), x, y); y += gap;
-
   doc.setFont(undefined, 'normal'); doc.setFontSize(11);
-
-  // P.O. #
   doc.text('P.O. # ' + String(data.po || '—'), x, y); y += gap;
-
-  // LOT #
   doc.text('LOT # ' + String(data.lotNumber || '—'), x, y); y += gap;
-
-  // Part #
   doc.text('Part #:', x, y); y += 9;
   doc.setFont(undefined, 'bold'); doc.setFontSize(9);
   doc.text(String(data.partCode || '—'), x, y); y += gap;
-
-  // QTY
   doc.setFont(undefined, 'normal'); doc.setFontSize(11);
   doc.text('QTY: ' + String(data.qty || 0) + ' ' + String(data.uom || 'Feet'), x, y); y += gap;
-
-  // Pkg
   doc.text('Pkg: ' + data.boxIndex + ' of ' + data.totalBoxes, x, y);
 }
+
 function generatePDFBase64() {
   var jsPDFLib = window.jspdf ? window.jspdf.jsPDF : (window.jsPDF || null);
   if (!jsPDFLib || !_currentPkgData) return null;
-  var h         = _currentPkgData.header;
-  var items     = _currentPkgData.items || [];
-  var itemInfo  = {};
+  var h        = _currentPkgData.header;
+  var items    = _currentPkgData.items || [];
+  var itemInfo = {};
   items.forEach(function(item) { itemInfo[item.itemCode] = item; });
   var doc        = null;
   var totalBoxes = _pkgBoxes.length;
@@ -823,6 +778,7 @@ function generatePDFBase64() {
   if (!doc) return null;
   return doc.output('datauristring').split(',')[1];
 }
+
 function collectPhotos() {
   var photos = [];
   _pkgBoxes.forEach(function(box, bIdx) {
@@ -844,13 +800,10 @@ function reprintPDF(orderNo) {
       var hdr   = data.header;
       var items = data.items  || [];
       var boxes = data.boxes  || {};
-
       var itemInfo = {};
       items.forEach(function(item) { itemInfo[item.itemCode] = item; });
-
       var jsPDFLib = window.jspdf ? window.jspdf.jsPDF : (window.jsPDF || null);
       if (!jsPDFLib) { showToast('PDF library not loaded', 'error'); return; }
-
       var allEntries = [];
       Object.keys(boxes).forEach(function(itemCode) {
         (boxes[itemCode] || []).forEach(function(box) {
@@ -858,14 +811,12 @@ function reprintPDF(orderNo) {
         });
       });
       allEntries.sort(function(a,b) { return a.boxIndex - b.boxIndex; });
-
       if (allEntries.length === 0) {
         items.forEach(function(item) {
           allEntries.push({ itemCode:item.itemCode, boxIndex:1, totalBoxes:1, qtyInBox:item.qtyPulled||0 });
         });
       }
       if (allEntries.length === 0) { showToast('No data for this order', 'error'); return; }
-
       var doc = null;
       allEntries.forEach(function(entry) {
         var info = itemInfo[entry.itemCode] || {};
@@ -882,11 +833,11 @@ function reprintPDF(orderNo) {
           totalBoxes: entry.totalBoxes
         });
       });
-
       if (doc) { doc.save('ArTek_Order_' + orderNo + '_tags.pdf'); showToast('PDF tags ready!', 'success'); }
     })
     .catch(function() { showToast('Error loading order', 'error'); });
 }
+
 // ── OOR ───────────────────────────────────────────────────
 
 function loadOOR() {
@@ -973,7 +924,6 @@ function renderOORItemsWithBoxes(container, data) {
   var boxes  = data.boxes  || {};
   var header = data.header || {};
   if (!items.length) { container.innerHTML = '<div class="oor-item-loading">No items.</div>'; return; }
-
   container.innerHTML = '<div class="oor-complete-note">✓ Order packaged and complete</div>' +
     items.map(function(item) {
       var code      = item.itemCode || '—';
