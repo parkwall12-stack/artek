@@ -534,8 +534,24 @@ function openPackageOrder(orderNo) {
     .then(function(data) {
       if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
       _currentPkgData = data;
-      // Always start with one blank box — user selects parts manually
-      _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
+
+      var byBox = {};
+      Object.keys(data.boxes || {}).forEach(function(itemCode) {
+        (data.boxes[itemCode] || []).forEach(function(box) {
+          if (!byBox[box.boxIndex]) byBox[box.boxIndex] = [];
+          byBox[box.boxIndex].push({ itemCode:itemCode, qty:box.qtyInBox||0, weight:box.weight||0, photoUrl:null });
+        });
+      });
+      var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
+
+      if (boxIdxs.length > 0 && data.header.status === 'Packaging') {
+        // Restore saved progress
+        _pkgBoxes = boxIdxs.map(function(bIdx) { return { parts: byBox[bIdx] }; });
+      } else {
+        // Fresh start — one blank box
+        _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
+      }
+
       renderPackageDetail(data);
     })
     .catch(function(err) {
@@ -679,12 +695,15 @@ function savePackageDraft() {
   apiFetch('savePackageData', payload)
     .then(function(res) {
       btn.disabled = false; btn.textContent = 'Save for later';
-      if (res.success) showToast('Saved!', 'success');
-      else showToast('Error: ' + (res.error||''), 'error');
+      if (res.success) {
+        showToast('Saved!', 'success');
+        setTimeout(exitPackageDetail, 900);
+      } else {
+        showToast('Error: ' + (res.error||''), 'error');
+      }
     })
     .catch(function() { btn.disabled = false; btn.textContent = 'Save for later'; showToast('Error saving', 'error'); });
 }
-
 function completeOrder() {
   var payload = collectPackagePayload(true);
   if (!payload) return;
