@@ -555,7 +555,7 @@ function openPackageOrder(orderNo) {
       if (boxIdxs.length > 0) {
         _pkgBoxes = boxIdxs.map(function(bIdx) { return { parts: byBox[bIdx] }; });
       } else if (data.items && data.items.length > 0) {
-        _pkgBoxes = [{ parts: data.items.map(function(item) { return { itemCode:item.itemCode, qty:item.qtyPulled||0, weight:0, photoUrl:null }; }) }];
+        _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
       } else {
         _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
       }
