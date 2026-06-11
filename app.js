@@ -1,6 +1,6 @@
 // ── Config ────────────────────────────────────────────────
 var API = 'https://artek-proxy.parkwall12.workers.dev';
-
+var DRIVE_SCRIPT = 'https://script.google.com/macros/s/AKfycbyA8mFEQ8zbRbWtZ2Z-WR-p0wC741pANpiMIMmlRGGsl2mXR-mgSyMEVLax8ZuHpoxP2Q/exec';
 var _oorData         = [];
 var _scanData        = [];
 var _packageData     = [];
@@ -712,16 +712,19 @@ function completeOrder() {
         var photos    = collectPhotos();
         var h         = _currentPkgData.header;
         var date      = new Date().toISOString().split('T')[0];
-        apiFetchPost({
-          action: 'saveToDrive',
-          orderNo: h.orderNumber,
-          location: h.location || 'MCM',
-          po: h.po || '',
-          completionDate: date,
-          pdfBase64: pdfBase64,
-          photos: photos
-        }).then(function(dr) {
-          showToast(dr.success ? 'Order complete — saved to Drive!' : 'Order complete (Drive: ' + (dr.error||'failed') + ')', 'success');
+        fetch(DRIVE_SCRIPT, {
+  method: 'POST',
+  mode: 'no-cors',
+  headers: { 'Content-Type': 'text/plain' },
+  body: JSON.stringify({
+    orderNo: h.orderNumber,
+    location: h.location || 'MCM',
+    completionDate: date,
+    pdfBase64: pdfBase64,
+    photos: photos
+  })
+});
+showToast('Order complete — saving to Drive…', 'success');
         }).catch(function() {
           showToast('Order complete (Drive offline)', 'success');
         });
