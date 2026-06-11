@@ -1,6 +1,7 @@
 // ── Config ────────────────────────────────────────────────
 var API = 'https://artek-proxy.parkwall12.workers.dev';
 var DRIVE_SCRIPT = 'https://script.google.com/macros/s/AKfycbyA8mFEQ8zbRbWtZ2Z-WR-p0wC741pANpiMIMmlRGGsl2mXR-mgSyMEVLax8ZuHpoxP2Q/exec';
+
 var _oorData         = [];
 var _scanData        = [];
 var _packageData     = [];
@@ -224,9 +225,9 @@ function openOrderDetail(orderNo) {
     apiFetch('getBoxPhotos',    { orderNo: String(orderNo) })
   ]).then(function(results) {
     var data   = results[0];
-    var photos = results[1] || [];
+    var photos = results[1];
     if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
-    renderOrderDetail(data, photos);
+    renderOrderDetail(data, Array.isArray(photos) ? photos : []);
   }).catch(function() { showToast('Error loading order', 'error'); });
 }
 
@@ -236,9 +237,8 @@ function renderOrderDetail(data, photos) {
   var boxes = data.boxes || {};
   photos    = photos || [];
 
-  // Photo lookup: "boxIdx|partCode" → thumbnailUrl
   var photoLookup = {};
-  photos.forEach(function(p) { photoLookup[p.boxIdx + '|' + p.partCode] = p.thumbnailUrl; });
+  photos.forEach(function(p) { photoLookup[p.boxIdx + '|' + p.partCode] = p.photoData || p.thumbnailUrl; });
 
   var statusBadge = h.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>'  :
                     h.status === 'Packaging'  ? '<span class="badge badge-inprog">Packaging</span>'   :
@@ -247,21 +247,17 @@ function renderOrderDetail(data, photos) {
   var bodyHtml = '';
 
   if (items.length === 0) {
-    bodyHtml = '<div class="detail-box-section"><p style="color:#94a3b8;font-size:.85rem;padding:8px 0">No items found.</p></div>';
+    bodyHtml = '<p style="color:#94a3b8;font-size:.85rem;padding:8px 0">No items found.</p>';
   } else {
     items.forEach(function(item) {
       var itemBoxes = boxes[item.itemCode] || [];
 
-      // Collect photos for this item across all boxes
       var photoHtml = '';
       itemBoxes.forEach(function(box) {
-        var thumbUrl = photoLookup[box.boxIndex + '|' + item.itemCode];
-        if (thumbUrl) {
-          photoHtml += '<img src="' + thumbUrl + '" class="detail-photo"/>';
-        }
+        var url = photoLookup[box.boxIndex + '|' + item.itemCode];
+        if (url) photoHtml += '<img src="' + url + '" class="detail-photo"/>';
       });
 
-      // Box breakdown
       var boxHtml = '';
       if (itemBoxes.length > 0) {
         boxHtml = '<div class="detail-item-boxes">';
@@ -300,6 +296,7 @@ function renderOrderDetail(data, photos) {
     '<div class="detail-box-section">' + bodyHtml + '</div>' +
     actionHtml;
 }
+
 function exitOrderDetail() {
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   var returnTab = _pkgReturnTab || 'scan';
@@ -515,7 +512,7 @@ function renderPackageList(orders) {
   }).join('');
 }
 
-// ── Package order detail ──────────────────────────────────
+// ── Package order detail (edit mode) ──────────────────────
 
 function openPackageOrder(orderNo) {
   _pkgReturnTab = document.querySelector('.tab-btn.active') ? document.querySelector('.tab-btn.active').id.replace('tab-','') : 'package';
@@ -540,10 +537,8 @@ function openPackageOrder(orderNo) {
       var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
 
       if (boxIdxs.length > 0) {
-        // Restore saved progress
         _pkgBoxes = boxIdxs.map(function(bIdx) { return { parts: byBox[bIdx] }; });
       } else {
-        // Fresh start — one blank box
         _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
       }
 
@@ -655,14 +650,31 @@ function deleteBox(bIdx) {
   renderAllBoxes();
 }
 
+function compressPhoto(dataUrl, callback) {
+  var img = new Image();
+  img.onload = function() {
+    var maxDim = 640;
+    var w = img.width, h = img.height;
+    if (w > h && w > maxDim) { h = h * (maxDim / w); w = maxDim; }
+    else if (h > maxDim)     { w = w * (maxDim / h); h = maxDim; }
+    var canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+    callback(canvas.toDataURL('image/jpeg', 0.5));
+  };
+  img.src = dataUrl;
+}
+
 function handleBoxPhotoNew(bIdx, pIdx, input) {
   if (!input.files || !input.files[0]) return;
   var reader = new FileReader();
   reader.onload = function(e) {
-    if (!_pkgBoxes[bIdx] || !_pkgBoxes[bIdx].parts[pIdx]) return;
-    _pkgBoxes[bIdx].parts[pIdx].photoUrl = e.target.result;
-    var preview = document.getElementById('photo-' + bIdx + '-' + pIdx);
-    if (preview) preview.innerHTML = '<img src="' + e.target.result + '"/>';
+    compressPhoto(e.target.result, function(compressed) {
+      if (!_pkgBoxes[bIdx] || !_pkgBoxes[bIdx].parts[pIdx]) return;
+      _pkgBoxes[bIdx].parts[pIdx].photoUrl = compressed;
+      var preview = document.getElementById('photo-' + bIdx + '-' + pIdx);
+      if (preview) preview.innerHTML = '<img src="' + compressed + '"/>';
+    });
   };
   reader.readAsDataURL(input.files[0]);
 }
@@ -699,6 +711,7 @@ function savePackageDraft() {
     })
     .catch(function() { btn.disabled = false; btn.textContent = 'Save for later'; showToast('Error saving', 'error'); });
 }
+
 function completeOrder() {
   var payload = collectPackagePayload(true);
   if (!payload) return;
@@ -712,22 +725,21 @@ function completeOrder() {
         var photos    = collectPhotos();
         var h         = _currentPkgData.header;
         var date      = new Date().toISOString().split('T')[0];
+
         fetch(DRIVE_SCRIPT, {
-  method: 'POST',
-  mode: 'no-cors',
-  headers: { 'Content-Type': 'text/plain' },
-  body: JSON.stringify({
-    orderNo: h.orderNumber,
-    location: h.location || 'MCM',
-    completionDate: date,
-    pdfBase64: pdfBase64,
-    photos: photos
-  })
-});
-showToast('Order complete — saving to Drive…', 'success');
-        }).catch(function() {
-          showToast('Order complete (Drive offline)', 'success');
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            orderNo: h.orderNumber,
+            location: h.location || 'MCM',
+            completionDate: date,
+            pdfBase64: pdfBase64,
+            photos: photos
+          })
         });
+
+        showToast('Order complete — saving to Drive…', 'success');
         setTimeout(exitPackageDetail, 900);
       } else {
         showToast('Error: ' + (res.error||''), 'error');
@@ -975,9 +987,9 @@ function viewOrderFromOOR(orderNo) {
     apiFetch('getBoxPhotos',    { orderNo: String(orderNo) })
   ]).then(function(results) {
     var data   = results[0];
-    var photos = results[1] || [];
+    var photos = results[1];
     if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
-    renderOrderDetail(data, photos);
+    renderOrderDetail(data, Array.isArray(photos) ? photos : []);
   }).catch(function() { showToast('Error loading order', 'error'); });
 }
 
