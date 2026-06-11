@@ -15,6 +15,7 @@ var _currentPkgData  = null;
 var _pkgBoxes        = [];
 var _sessionPicks    = [];
 var _pkgReturnTab    = null;
+var _entryMethod     = {};   // idx → 'Scanned' | 'Typed in'
 
 // ── Fetch ─────────────────────────────────────────────────
 
@@ -122,7 +123,7 @@ function _startScanner(label) {
             document.getElementById('scannerStatus').textContent = 'Got it: ' + code;
             document.getElementById('scannerStatus').className = 'scanner-status success';
             if (_partScanIdx !== null) {
-              setTimeout(function() { closeScanner(); verifyPartScan(_partScanIdx, _partScanCode, code); }, 500);
+              setTimeout(function() { closeScanner(); verifyPartScan(_partScanIdx, _partScanCode, code, true); }, 500);
             } else if (_scanTargetId) {
               var input = document.getElementById(_scanTargetId);
               if (input) { input.value = code; input.dispatchEvent(new Event('input')); }
@@ -152,7 +153,9 @@ function closeScanner() {
 
 // ── Part verification ─────────────────────────────────────
 
-function verifyPartScan(idx, expectedCode, scannedCode) {
+function verifyPartScan(idx, expectedCode, scannedCode, viaScanner) {
+  _entryMethod[idx] = viaScanner ? 'Scanned' : 'Typed in';
+
   var expectedMiddle = extractMiddleCode(expectedCode);
   var scannedMiddle  = extractMiddleCode(scannedCode);
   var isMatch        = expectedMiddle === scannedMiddle;
@@ -250,33 +253,27 @@ function renderOrderDetail(data, photos) {
     bodyHtml = '<p style="color:#94a3b8;font-size:.85rem;padding:8px 0">No items found.</p>';
   } else {
     items.forEach(function(item) {
-      var itemBoxes = boxes[item.itemCode] || [];
+      var itemBoxes = (boxes[item.itemCode] || []).slice().sort(function(a,b) { return a.boxIndex - b.boxIndex; });
 
-      var photoHtml = '';
+      // Each box this part is in gets its own sub-box with photo on the right
+      var boxesHtml = '';
       itemBoxes.forEach(function(box) {
         var url = photoLookup[box.boxIndex + '|' + item.itemCode];
-        if (url) photoHtml += '<img src="' + url + '" class="detail-photo"/>';
+        boxesHtml += '<div class="detail-box-row">' +
+          '<div class="detail-box-row-info">' +
+            '<div class="detail-box-row-title">Box ' + box.boxIndex + '</div>' +
+            '<div class="detail-box-row-meta">' + box.qtyInBox + ' ' + (item.uom||'ft') + ' &nbsp;·&nbsp; ' + box.weight + ' lbs</div>' +
+          '</div>' +
+          (url ? '<img src="' + url + '" class="detail-box-row-photo"/>' : '') +
+        '</div>';
       });
-
-      var boxHtml = '';
-      if (itemBoxes.length > 0) {
-        boxHtml = '<div class="detail-item-boxes">';
-        itemBoxes.forEach(function(box) {
-          boxHtml += '<div class="detail-item-row">' +
-            '<span>Box ' + box.boxIndex + ' of ' + box.totalBoxes + '</span>' +
-            '<strong>' + box.qtyInBox + ' ' + (item.uom||'ft') + ' · ' + box.weight + ' lbs</strong>' +
-          '</div>';
-        });
-        boxHtml += '</div>';
-      }
 
       bodyHtml += '<div class="detail-part-entry">' +
         '<div class="detail-item-code">' + item.itemCode + '</div>' +
         (item.description ? '<div class="detail-item-desc">' + item.description + '</div>' : '') +
         '<div class="detail-item-row"><span>Lot #</span><strong>' + (item.lotNumber || '—') + '</strong></div>' +
         '<div class="detail-item-row"><span>Pieces pulled</span><strong>' + item.qtyPulled + ' ' + (item.uom||'') + '</strong></div>' +
-        boxHtml +
-        (photoHtml ? '<div class="detail-photos">' + photoHtml + '</div>' : '') +
+        boxesHtml +
       '</div>';
     });
   }
@@ -362,6 +359,7 @@ function lookupOrder() {
 function showPickPhase(data) {
   document.getElementById('phase-lookup').style.display = 'none';
   document.getElementById('phase-pick').style.display   = 'block';
+  _entryMethod = {};
   var h  = data.header;
   var pd = h.promiseDate ? new Date(h.promiseDate).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '—';
   document.getElementById('pickOrderHeader').innerHTML =
@@ -383,7 +381,7 @@ function showPickPhase(data) {
       '</div>' +
       '<div class="pick-label">Part number</div>' +
       '<div class="pick-scan-row">' +
-        '<input type="text" id="pick-scan-' + idx + '" placeholder="Scan or type part #" autocomplete="off" onchange="verifyPartScan(' + idx + ',\'' + safeCode + '\',this.value)"/>' +
+        '<input type="text" id="pick-scan-' + idx + '" placeholder="Scan or type part #" autocomplete="off" onchange="verifyPartScan(' + idx + ',\'' + safeCode + '\',this.value,false)"/>' +
         '<button class="scan-btn" onclick="openPartScanner(' + idx + ',\'' + safeCode + '\')">&#9641;</button>' +
       '</div>' +
       '<div class="pick-status" id="pick-status-' + idx + '"></div>' +
@@ -448,7 +446,8 @@ function savePick() {
       var lotNumber    = (document.getElementById('pick-lot-'  + idx)||{}).value || '';
       var qtyPulled    = parseFloat((document.getElementById('pick-qty-' + idx)||{}).value || 0);
       var match        = extractMiddleCode(scannedCode) === extractMiddleCode(expectedCode);
-      return { expectedCode:expectedCode, description:item.description||'', uom:item.uom||'', lotNumber:lotNumber, qtyRequired:item.qtyOrdered, qtyPulled:qtyPulled, match:match };
+      var entry        = scannedCode ? (_entryMethod[idx] || 'Typed in') : '';
+      return { expectedCode:expectedCode, description:item.description||'', uom:item.uom||'', lotNumber:lotNumber, qtyRequired:item.qtyOrdered, qtyPulled:qtyPulled, match:match, entry:entry };
     })
   };
   btn.disabled = true; btn.textContent = 'Saving…';
@@ -724,20 +723,30 @@ function completeOrder() {
         var pdfBase64 = generatePDFBase64();
         var photos    = collectPhotos();
         var h         = _currentPkgData.header;
-        var date      = new Date().toISOString().split('T')[0];
 
-        fetch(DRIVE_SCRIPT, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({
-            orderNo: h.orderNumber,
-            location: h.location || 'MCM',
-            completionDate: date,
-            pdfBase64: pdfBase64,
-            photos: photos
+        // Look up promise date from OOR so Drive folders are organized by ship date
+        apiFetch('getFullOOROrder', { orderNo: String(h.orderNumber) })
+          .then(function(oor) {
+            var pd = (oor && oor.header && oor.header.promiseDate)
+              ? new Date(oor.header.promiseDate).toISOString().split('T')[0]
+              : new Date().toISOString().split('T')[0];
+            return pd;
           })
-        });
+          .catch(function() { return new Date().toISOString().split('T')[0]; })
+          .then(function(folderDate) {
+            fetch(DRIVE_SCRIPT, {
+              method: 'POST',
+              mode: 'no-cors',
+              headers: { 'Content-Type': 'text/plain' },
+              body: JSON.stringify({
+                orderNo: h.orderNumber,
+                location: h.location || 'MCM',
+                completionDate: folderDate,
+                pdfBase64: pdfBase64,
+                photos: photos
+              })
+            });
+          });
 
         showToast('Order complete — saving to Drive…', 'success');
         setTimeout(exitPackageDetail, 900);
@@ -774,7 +783,27 @@ function renderPDFTag(doc, data) {
   doc.text(String(data.partCode || '—'), x, y); y += gap;
   doc.setFont(undefined, 'normal'); doc.setFontSize(11);
   doc.text('QTY: ' + String(data.qty || 0) + ' ' + String(data.uom || 'Feet'), x, y); y += gap;
-  doc.text('Pkg: ' + data.boxIndex + ' of ' + data.totalBoxes, x, y);
+  doc.text('Pkg: ' + data.pkgIndex + ' of ' + data.pkgTotal, x, y);
+}
+
+// Build per-part tag entries: each part gets one tag per box it's in,
+// numbered "X of N" where N = how many boxes contain THAT part
+function buildTagEntries(boxesFlat) {
+  // boxesFlat: [{itemCode, boxIndex, qty}]
+  var byPart = {};
+  boxesFlat.forEach(function(e) {
+    if (!byPart[e.itemCode]) byPart[e.itemCode] = [];
+    byPart[e.itemCode].push(e);
+  });
+  var entries = [];
+  Object.keys(byPart).forEach(function(code) {
+    var arr = byPart[code].slice().sort(function(a,b) { return a.boxIndex - b.boxIndex; });
+    arr.forEach(function(e, i) {
+      entries.push({ itemCode:code, qty:e.qty, pkgIndex:i+1, pkgTotal:arr.length, boxIndex:e.boxIndex });
+    });
+  });
+  entries.sort(function(a,b) { return a.boxIndex - b.boxIndex; });
+  return entries;
 }
 
 function generatePDFBase64() {
@@ -784,24 +813,31 @@ function generatePDFBase64() {
   var items    = _currentPkgData.items || [];
   var itemInfo = {};
   items.forEach(function(item) { itemInfo[item.itemCode] = item; });
-  var doc        = null;
-  var totalBoxes = _pkgBoxes.length;
+
+  var boxesFlat = [];
   _pkgBoxes.forEach(function(box, bIdx) {
     box.parts.forEach(function(part) {
-      if (!part.itemCode) return;
-      var info = itemInfo[part.itemCode] || {};
-      if (!doc) { doc = new jsPDFLib({ orientation:'portrait', unit:'mm', format:[101.6, 152.4] }); }
-      else       { doc.addPage([101.6, 152.4], 'portrait'); }
-      renderPDFTag(doc, {
-        location:   h.location || '—',
-        po:         h.po || '—',
-        lotNumber:  info.lotNumber || '—',
-        partCode:   part.itemCode,
-        qty:        part.qty || 0,
-        uom:        info.uom || 'Feet',
-        boxIndex:   bIdx + 1,
-        totalBoxes: totalBoxes
-      });
+      if (part.itemCode) boxesFlat.push({ itemCode:part.itemCode, boxIndex:bIdx+1, qty:part.qty||0 });
+    });
+  });
+
+  var entries = buildTagEntries(boxesFlat);
+  if (entries.length === 0) return null;
+
+  var doc = null;
+  entries.forEach(function(entry) {
+    var info = itemInfo[entry.itemCode] || {};
+    if (!doc) { doc = new jsPDFLib({ orientation:'portrait', unit:'mm', format:[101.6, 152.4] }); }
+    else       { doc.addPage([101.6, 152.4], 'portrait'); }
+    renderPDFTag(doc, {
+      location:  h.location || '—',
+      po:        h.po || '—',
+      lotNumber: info.lotNumber || '—',
+      partCode:  entry.itemCode,
+      qty:       entry.qty,
+      uom:       info.uom || 'Feet',
+      pkgIndex:  entry.pkgIndex,
+      pkgTotal:  entry.pkgTotal
     });
   });
   if (!doc) return null;
@@ -833,36 +869,53 @@ function reprintPDF(orderNo) {
       items.forEach(function(item) { itemInfo[item.itemCode] = item; });
       var jsPDFLib = window.jspdf ? window.jspdf.jsPDF : (window.jsPDF || null);
       if (!jsPDFLib) { showToast('PDF library not loaded', 'error'); return; }
-      var allEntries = [];
+
+      var boxesFlat = [];
       Object.keys(boxes).forEach(function(itemCode) {
         (boxes[itemCode] || []).forEach(function(box) {
-          allEntries.push({ itemCode:itemCode, boxIndex:box.boxIndex, totalBoxes:box.totalBoxes, qtyInBox:box.qtyInBox });
+          boxesFlat.push({ itemCode:itemCode, boxIndex:box.boxIndex, qty:box.qtyInBox });
         });
       });
-      allEntries.sort(function(a,b) { return a.boxIndex - b.boxIndex; });
-      if (allEntries.length === 0) {
+
+      // Fallback — no box data, one tag per item
+      if (boxesFlat.length === 0) {
         items.forEach(function(item) {
-          allEntries.push({ itemCode:item.itemCode, boxIndex:1, totalBoxes:1, qtyInBox:item.qtyPulled||0 });
+          boxesFlat.push({ itemCode:item.itemCode, boxIndex:1, qty:item.qtyPulled||0 });
         });
       }
-      if (allEntries.length === 0) { showToast('No data for this order', 'error'); return; }
+
+      var entries = buildTagEntries(boxesFlat);
+      if (entries.length === 0) { showToast('No data for this order', 'error'); return; }
+
       var doc = null;
-      allEntries.forEach(function(entry) {
+      entries.forEach(function(entry) {
         var info = itemInfo[entry.itemCode] || {};
         if (!doc) { doc = new jsPDFLib({ orientation:'portrait', unit:'mm', format:[101.6, 152.4] }); }
         else       { doc.addPage([101.6, 152.4], 'portrait'); }
         renderPDFTag(doc, {
-          location:   hdr.location || '—',
-          po:         hdr.po || '—',
-          lotNumber:  info.lotNumber || '—',
-          partCode:   entry.itemCode,
-          qty:        entry.qtyInBox,
-          uom:        info.uom || 'Feet',
-          boxIndex:   entry.boxIndex,
-          totalBoxes: entry.totalBoxes
+          location:  hdr.location || '—',
+          po:        hdr.po || '—',
+          lotNumber: info.lotNumber || '—',
+          partCode:  entry.itemCode,
+          qty:       entry.qty,
+          uom:       info.uom || 'Feet',
+          pkgIndex:  entry.pkgIndex,
+          pkgTotal:  entry.pkgTotal
         });
       });
-      if (doc) { doc.save('ArTek_Order_' + orderNo + '_tags.pdf'); showToast('PDF tags ready!', 'success'); }
+
+      if (doc) {
+        // Open in a new tab for direct printing instead of downloading
+        var blobUrl = doc.output('bloburl');
+        var win = window.open(blobUrl, '_blank');
+        if (!win) {
+          // Popup blocked — fall back to download
+          doc.save('ArTek_Order_' + orderNo + '_tags.pdf');
+          showToast('Popup blocked — downloaded instead', 'info');
+        } else {
+          showToast('Tags ready to print!', 'success');
+        }
+      }
     })
     .catch(function() { showToast('Error loading order', 'error'); });
 }
@@ -956,11 +1009,11 @@ function renderOORItemsWithBoxes(container, data) {
   container.innerHTML = '<div class="oor-complete-note">✓ Order packaged and complete</div>' +
     items.map(function(item) {
       var code      = item.itemCode || '—';
-      var itemBoxes = boxes[code]   || [];
+      var itemBoxes = (boxes[code] || []).slice().sort(function(a,b) { return a.boxIndex - b.boxIndex; });
       var boxHtml   = itemBoxes.length
         ? '<div class="oor-item-boxes">' +
             itemBoxes.map(function(b) {
-              return '<span class="box-tag">Box ' + b.boxIndex + '/' + b.totalBoxes + ': ' + b.qtyInBox + ' ' + (item.uom||'') + ' · ' + b.weight + ' lbs</span>';
+              return '<span class="box-tag">Box ' + b.boxIndex + ': ' + b.qtyInBox + ' ' + (item.uom||'') + ' · ' + b.weight + ' lbs</span>';
             }).join('') + '</div>'
         : '';
       return '<div class="oor-item">' +
