@@ -923,6 +923,21 @@ function reprintPDF(orderNo) {
     .catch(function() { showToast('Error loading order', 'error'); });
 }
 
+// ── Enhance Photo in OOR ───────────────────────────────────────────────────
+function openPhotoLightbox(src) {
+  var overlay = document.getElementById('photoLightbox');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'photoLightbox';
+    overlay.className = 'photo-lightbox';
+    overlay.onclick = function() { overlay.classList.remove('active'); };
+    overlay.innerHTML = '<img id="photoLightboxImg"/>';
+    document.body.appendChild(overlay);
+  }
+  document.getElementById('photoLightboxImg').src = src;
+  overlay.classList.add('active');
+}
+
 // ── OOR ───────────────────────────────────────────────────
 
 function loadOOR() {
