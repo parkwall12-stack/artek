@@ -17,6 +17,45 @@ var _sessionPicks    = [];
 var _pkgReturnTab    = null;
 var _entryMethod     = {};   // idx → 'Scanned' | 'Typed in'
 
+// ── Passcode gate ─────────────────────────────────────────
+var PASSCODE = '4820';   // change this to whatever code you want
+
+function todayStamp() {
+  return new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+}
+
+function isUnlocked() {
+  try {
+    return sessionStorage.getItem('artek_unlocked') === todayStamp() ||
+           localStorage.getItem('artek_unlocked') === todayStamp();
+  } catch(e) { return false; }
+}
+
+function checkPasscode() {
+  var val = document.getElementById('passcodeInput').value.trim();
+  var err = document.getElementById('passcodeError');
+  if (val === PASSCODE) {
+    try { localStorage.setItem('artek_unlocked', todayStamp()); } catch(e) {}
+    document.getElementById('passcodeOverlay').classList.add('hidden');
+    err.textContent = '';
+  } else {
+    err.textContent = 'Incorrect passcode';
+    document.getElementById('passcodeInput').value = '';
+    document.getElementById('passcodeInput').focus();
+  }
+}
+
+function initPasscode() {
+  if (isUnlocked()) {
+    document.getElementById('passcodeOverlay').classList.add('hidden');
+  } else {
+    setTimeout(function() {
+      var inp = document.getElementById('passcodeInput');
+      if (inp) inp.focus();
+    }, 200);
+  }
+}
+
 // ── Fetch ─────────────────────────────────────────────────
 
 function apiFetch(action, payload) {
@@ -1074,6 +1113,8 @@ function showToast(msg, type) {
   setTimeout(function() { t.classList.remove('show'); }, 3200);
 }
 
+
 // ── Init ──────────────────────────────────────────────────
 
+initPasscode();
 loadOrders();
