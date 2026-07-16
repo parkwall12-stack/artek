@@ -18,7 +18,7 @@ var _pkgReturnTab    = null;
 var _entryMethod     = {};   // idx → 'Scanned' | 'Typed in'
 
 // ── Passcode gate ─────────────────────────────────────────
-var PASSCODE = '4820';   // change this to whatever code you want
+var PASSCODE = '3311';   // change this to whatever code you want
 
 function todayStamp() {
   return new Date().toISOString().split('T')[0]; // YYYY-MM-DD
