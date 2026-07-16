@@ -204,7 +204,12 @@ body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:
 .scanner-close:hover { background:rgba(255,255,255,0.1); }
 .detail-item-boxes { margin:4px 0 6px; }
 .detail-photos { margin-top:10px; display:flex; flex-direction:column; gap:8px; }
+.detail-box-row-photo { width:150px; max-height:150px; object-fit:cover; border-radius:var(--radius); border:1px solid var(--border); flex-shrink:0; cursor:pointer; transition:transform .15s; }
+.detail-box-row-photo:hover { transform:scale(1.03); }
 
+.photo-lightbox { display:none; position:fixed; inset:0; z-index:300; background:rgba(0,0,0,0.9); align-items:center; justify-content:center; padding:20px; cursor:zoom-out; }
+.photo-lightbox.active { display:flex; }
+.photo-lightbox img { max-width:100%; max-height:100%; border-radius:8px; box-shadow:0 8px 40px rgba(0,0,0,0.5); }
 /* ── Toast ───────────────────────────────────── */
 .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(60px); background:var(--navy); color:#fff; padding:11px 22px; border-radius:var(--radius); font-size:.88rem; opacity:0; transition:all .3s; pointer-events:none; white-space:nowrap; z-index:999; }
 .toast.show   { opacity:1; transform:translateX(-50%) translateY(0); }
