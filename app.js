@@ -264,7 +264,7 @@ function renderOrderDetail(data, photos) {
             '<div class="detail-box-row-title">Box ' + box.boxIndex + '</div>' +
             '<div class="detail-box-row-meta">' + box.qtyInBox + ' ' + (item.uom||'ft') + ' &nbsp;·&nbsp; ' + box.weight + ' lbs</div>' +
           '</div>' +
-          (url ? '<img src="' + url + '" class="detail-box-row-photo"/>' : '') +
+          (url ? '<img src="' + url + '" class="detail-box-row-photo" onclick="openPhotoLightbox(this.src)"/>' : '') +
         '</div>';
       });
 
