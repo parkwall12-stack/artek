@@ -724,13 +724,17 @@ function completeOrder() {
         var photos    = collectPhotos();
         var h         = _currentPkgData.header;
 
-        // Look up promise date from OOR so Drive folders are organized by ship date
+        // Store photos in the BoxPhotos sheet so the website can display them
+        if (photos.length > 0) {
+          apiFetchPost({ action:'saveBoxPhotos', orderNumber:h.orderNumber, photos:photos });
+        }
+
+        // Save PDF + photos to Drive, organized by promise date
         apiFetch('getFullOOROrder', { orderNo: String(h.orderNumber) })
           .then(function(oor) {
-            var pd = (oor && oor.header && oor.header.promiseDate)
+            return (oor && oor.header && oor.header.promiseDate)
               ? new Date(oor.header.promiseDate).toISOString().split('T')[0]
               : new Date().toISOString().split('T')[0];
-            return pd;
           })
           .catch(function() { return new Date().toISOString().split('T')[0]; })
           .then(function(folderDate) {
@@ -756,7 +760,6 @@ function completeOrder() {
     })
     .catch(function() { btn.disabled = false; btn.textContent = '✓ Complete order'; showToast('Error', 'error'); });
 }
-
 function exitPackageDetail() {
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   var returnTab = _pkgReturnTab || 'package';
