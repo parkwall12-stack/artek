@@ -432,8 +432,10 @@ function showPickPhase(data) {
   document.getElementById('phase-lookup').style.display = 'none';
   document.getElementById('phase-pick').style.display   = 'block';
   _entryMethod = {};
+
   var h  = data.header;
-  var pd = h.promiseDate ? new Date(h.promiseDate).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '—';
+  var pd = fmtDate(h.promiseDate);
+
   document.getElementById('pickOrderHeader').innerHTML =
     '<div class="pick-order-num">Order #' + h.orderNo + '</div>' +
     '<div class="pick-order-meta">' +
@@ -442,27 +444,39 @@ function showPickPhase(data) {
       ' &nbsp;·&nbsp; ' + (h.isPrepaid ? 'Prepaid' : 'Collect') +
       ' &nbsp;·&nbsp; Promise: ' + pd +
     '</div>';
+
   document.getElementById('pickItemsList').innerHTML = (data.items||[]).map(function(item, idx) {
     var code     = extractPartCode(item.itemCode);
     var safeCode = code.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+    var est     = pullEstimate(code, item.qtyOrdered);
+    var estHtml = est
+      ? '<div class="pull-estimate">↳ Pull ≈ <strong>' + est.bars + '</strong> bar' + (est.bars !== 1 ? 's' : '') +
+        ' @ 120&quot; &nbsp;·&nbsp; ' + est.perBar + ' cut' + (est.perBar !== 1 ? 's' : '') + ' of ' + est.len + '&quot; per bar</div>'
+      : '';
+
     return '<div class="pick-item-card" id="pick-card-' + idx + '">' +
       '<div class="pick-item-top">' +
         '<div class="pick-item-code">' + code + '</div>' +
         '<div class="pick-item-desc">' + (item.description||'') + '</div>' +
         '<span class="pick-item-req">Required: ' + item.qtyOrdered + ' ' + item.uom + '</span>' +
+        estHtml +
       '</div>' +
+
       '<div class="pick-label">Part number</div>' +
       '<div class="pick-scan-row">' +
         '<input type="text" id="pick-scan-' + idx + '" placeholder="Scan or type part #" autocomplete="off" onchange="verifyPartScan(' + idx + ',\'' + safeCode + '\',this.value,false)"/>' +
         '<button class="scan-btn" onclick="openPartScanner(' + idx + ',\'' + safeCode + '\')">&#9641;</button>' +
       '</div>' +
       '<div class="pick-status" id="pick-status-' + idx + '"></div>' +
+
       '<div class="pick-label">Lot number</div>' +
       '<div class="pick-scan-row">' +
         '<input type="text" id="pick-lot-' + idx + '" placeholder="Scan or type lot #" autocomplete="off"/>' +
         '<button class="scan-btn" onclick="openScanner(\'pick-lot-' + idx + '\')">&#9641;</button>' +
         '<button class="autofill-btn" id="autofill-btn-' + idx + '" onclick="autofillLot(' + idx + ')" title="Autofill lot number">⟳</button>' +
       '</div>' +
+
       '<div class="pick-qty-row">' +
         '<label>Pieces pulled</label>' +
         '<input type="number" id="pick-qty-' + idx + '" placeholder="0" min="0"/>' +
