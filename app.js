@@ -210,14 +210,14 @@ function openScanner(targetInputId) {
   _partScanCode = null;
   var label = targetInputId === 'orderNumber' ? 'Order number' :
               targetInputId.startsWith('pick-lot-') ? 'Lot number' : 'Part number';
-  _startScanner('Scanning: ' + label);
+  Scanner('Scanning: ' + label);
 }
 
 function openPartScanner(idx, expectedCode) {
   _partScanIdx  = idx;
   _partScanCode = expectedCode;
   _scanTargetId = null;
-  _startScanner('Scanning: Part ' + (idx + 1));
+  Scanner('Scanning: Part ' + (idx + 1));
 }
 
 function _startScanner(label) {
@@ -226,15 +226,32 @@ function _startScanner(label) {
   document.getElementById('scannerStatus').className = 'scanner-status';
   document.getElementById('scannerOverlay').classList.add('active');
   if (_codeReader) { try { _codeReader.reset(); } catch(e) {} _codeReader = null; }
+
   setTimeout(function() {
     try {
-      _codeReader = new ZXing.BrowserMultiFormatReader();
+      // Only try the 1D formats our part labels use — skips ~15 other decoders
+      var hints = new Map();
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+        ZXing.BarcodeFormat.CODE_128,
+        ZXing.BarcodeFormat.CODE_39
+      ]);
+
+      // Second arg = ms between decode attempts (default 500 — far too slow)
+      _codeReader = new ZXing.BrowserMultiFormatReader(hints, 120);
+
       _codeReader.decodeFromConstraints(
-        { video: { facingMode: { ideal: 'environment' } } },
+        {
+          video: {
+            facingMode: { ideal: 'environment' },
+            width:  { ideal: 1280 },
+            height: { ideal: 720 }
+          }
+        },
         document.getElementById('scannerVideo'),
         function(result, err) {
           if (result) {
             var code = result.getText();
+            console.log('Barcode format:', String(result.getBarcodeFormat()));
             document.getElementById('scannerStatus').textContent = 'Got it: ' + code;
             document.getElementById('scannerStatus').className = 'scanner-status success';
             if (_partScanIdx !== null) {
@@ -259,7 +276,6 @@ function _startScanner(label) {
     }
   }, 300);
 }
-
 function closeScanner() {
   if (_codeReader) { try { _codeReader.reset(); } catch(e) {} _codeReader = null; }
   document.getElementById('scannerOverlay').classList.remove('active');
