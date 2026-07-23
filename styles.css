@@ -187,6 +187,7 @@ body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:
 .oor-toggle-btn { height:36px; padding:0 14px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface); color:var(--muted); font-size:.82rem; font-weight:600; cursor:pointer; white-space:nowrap; flex-shrink:0; transition:background .15s; }
 .oor-toggle-btn:hover { background:var(--bg); color:var(--text); }
 .oor-toggle-btn.active { background:var(--navy); border-color:var(--navy); color:#fff; }
+.toast { white-space:normal; max-width:min(90vw, 520px); text-align:center; line-height:1.4; }
 /* ── Scanner ─────────────────────────────────── */
 .scanner-overlay { display:none; position:fixed; inset:0; z-index:200; background:rgba(0,0,0,0.92); flex-direction:column; align-items:center; justify-content:center; padding:20px; }
 .scanner-overlay.active { display:flex; }
