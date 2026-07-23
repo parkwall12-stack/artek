@@ -17,6 +17,12 @@ var _sessionPicks    = [];
 var _pkgReturnTab    = null;
 var _entryMethod     = {};   // idx → 'Scanned' | 'Typed in'
 
+// ── Status helper ─────────────────────────────────────────
+// Treat Complete, Archived, and Shipped/Archived as "finished"
+function isDoneStatus(s) {
+  return s === 'Complete' || s === 'Archived' || s === 'Shipped/Archived';
+}
+
 // ── Passcode gate ─────────────────────────────────────────
 var PASSCODE = '3311';   // change this to whatever code you want
 
@@ -240,8 +246,10 @@ function renderOrders(orders) {
   }
   list.innerHTML = orders.map(function(o) {
     var date  = o.timestamp ? new Date(o.timestamp).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '—';
-    var badge = o.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>'  :
-                o.status === 'Packaging' ? '<span class="badge badge-inprog">Packaging</span>'   :
+    var badge = o.status === 'Complete'         ? '<span class="badge badge-complete">Complete</span>' :
+                o.status === 'Archived'         ? '<span class="badge badge-complete">Archived</span>' :
+                o.status === 'Shipped/Archived' ? '<span class="badge badge-complete">Shipped/Archived</span>' :
+                o.status === 'Packaging'        ? '<span class="badge badge-inprog">Packaging</span>' :
                 '<span class="badge badge-ready">Picked</span>';
     return '<div class="order-card" onclick="openOrderDetail(\'' + o.orderNumber + '\')">' +
       '<div class="order-icon">📋</div>' +
@@ -282,8 +290,8 @@ function renderOrderDetail(data, photos) {
   var photoLookup = {};
   photos.forEach(function(p) { photoLookup[p.boxIdx + '|' + p.partCode] = p.photoData || p.thumbnailUrl; });
 
-  var statusBadge = h.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>'  :
-                    h.status === 'Packaging'  ? '<span class="badge badge-inprog">Packaging</span>'   :
+  var statusBadge = isDoneStatus(h.status)      ? '<span class="badge badge-complete">' + h.status + '</span>' :
+                    h.status === 'Packaging'    ? '<span class="badge badge-inprog">Packaging</span>' :
                     '<span class="badge badge-ready">Picked</span>';
 
   var bodyHtml = '';
@@ -317,7 +325,7 @@ function renderOrderDetail(data, photos) {
     });
   }
 
-  var actionHtml = h.status !== 'Complete'
+  var actionHtml = !isDoneStatus(h.status)
     ? '<button class="btn-save" style="width:100%;margin-top:12px" onclick="openPackageOrder(\'' + h.orderNumber + '\')">Open in Packaging →</button>'
     : '<button class="reprint-btn" style="margin-top:12px" onclick="reprintPDF(\'' + h.orderNumber + '\')">🖨 Print tags</button>';
 
@@ -799,6 +807,7 @@ function completeOrder() {
     })
     .catch(function() { btn.disabled = false; btn.textContent = '✓ Complete order'; showToast('Error', 'error'); });
 }
+
 function exitPackageDetail() {
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   var returnTab = _pkgReturnTab || 'package';
@@ -831,7 +840,6 @@ function renderPDFTag(doc, data) {
 // Build per-part tag entries: each part gets one tag per box it's in,
 // numbered "X of N" where N = how many boxes contain THAT part
 function buildTagEntries(boxesFlat) {
-  // boxesFlat: [{itemCode, boxIndex, qty}]
   var byPart = {};
   boxesFlat.forEach(function(e) {
     if (!byPart[e.itemCode]) byPart[e.itemCode] = [];
@@ -947,11 +955,9 @@ function reprintPDF(orderNo) {
       });
 
       if (doc) {
-        // Open in a new tab for direct printing instead of downloading
         var blobUrl = doc.output('bloburl');
         var win = window.open(blobUrl, '_blank');
         if (!win) {
-          // Popup blocked — fall back to download
           doc.save('ArTek_Order_' + orderNo + '_tags.pdf');
           showToast('Popup blocked — downloaded instead', 'info');
         } else {
@@ -962,7 +968,8 @@ function reprintPDF(orderNo) {
     .catch(function() { showToast('Error loading order', 'error'); });
 }
 
-// ── Enhance Photo in OOR ───────────────────────────────────────────────────
+// ── Photo lightbox ────────────────────────────────────────
+
 function openPhotoLightbox(src) {
   var overlay = document.getElementById('photoLightbox');
   if (!overlay) {
@@ -1000,7 +1007,7 @@ function renderOOR() {
   if (!filtered.length) { list.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><p>No orders found.</p></div>'; return; }
   list.innerHTML = filtered.map(function(o, idx) {
     var locBadge = '<span class="badge badge-loc">' + (o.location||'—') + '</span>';
-    var wmsBadge = o.wmsStatus === 'Complete' ? '<span class="badge badge-done">✓ Done</span>' :
+    var wmsBadge = isDoneStatus(o.wmsStatus) ? '<span class="badge badge-done">✓ Done</span>' :
                    (o.wmsStatus === 'Packaging' || o.wmsStatus === 'Picked') ? '<span class="badge badge-inprog">In WMS</span>' : '';
     return '<div class="oor-card" id="oor-' + idx + '">' +
       '<div class="oor-card-header" onclick="toggleOOR(' + idx + ',\'' + o.orderNo + '\',\'' + (o.wmsStatus||'') + '\')">' +
@@ -1029,7 +1036,7 @@ function toggleOOR(idx, orderNo, wmsStatus) {
     return;
   }
   itemsDiv.innerHTML = '<div class="oor-item-loading">Loading…</div>';
-  if (wmsStatus === 'Complete') {
+  if (isDoneStatus(wmsStatus)) {
     apiFetch('getPackageOrder', { orderNo: String(orderNo) })
       .then(function(data) {
         if (data.error) { itemsDiv.innerHTML = '<div class="oor-item-loading">' + data.error + '</div>'; return; }
@@ -1063,7 +1070,10 @@ function renderOORItemsWithBoxes(container, data) {
   var boxes  = data.boxes  || {};
   var header = data.header || {};
   if (!items.length) { container.innerHTML = '<div class="oor-item-loading">No items.</div>'; return; }
-  container.innerHTML = '<div class="oor-complete-note">✓ Order packaged and complete</div>' +
+  var noteText = (header.status === 'Archived' || header.status === 'Shipped/Archived')
+    ? '✓ Order packaged, shipped and archived'
+    : '✓ Order packaged and complete';
+  container.innerHTML = '<div class="oor-complete-note">' + noteText + '</div>' +
     items.map(function(item) {
       var code      = item.itemCode || '—';
       var itemBoxes = (boxes[code] || []).slice().sort(function(a,b) { return a.boxIndex - b.boxIndex; });
@@ -1112,7 +1122,6 @@ function showToast(msg, type) {
   setTimeout(function() { t.classList.add('show'); }, 10);
   setTimeout(function() { t.classList.remove('show'); }, 3200);
 }
-
 
 // ── Init ──────────────────────────────────────────────────
 
