@@ -115,6 +115,18 @@ function extractMiddleCode(code) {
   var parts = (code || '').trim().split('-');
   return parts.length >= 2 ? parts[1].trim().toUpperCase() : (code || '').trim().toUpperCase();
 }
+// True when codes match exactly, or one is a prefix of the other
+// (FP-9721K16 on the order vs FP-9721K16VNL000-12 on the barcode)
+function codesMatch(expectedCode, scannedCode) {
+  var a = extractMiddleCode(expectedCode);
+  var b = extractMiddleCode(scannedCode);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.length >= 4 && b.length >= 4) {
+    if (b.indexOf(a) === 0 || a.indexOf(b) === 0) return true;
+  }
+  return false;
+}
 
 function normalizeOrderNo(v) {
   var s = String(v || '').trim();
@@ -226,7 +238,7 @@ function verifyPartScan(idx, expectedCode, scannedCode, viaScanner) {
 
   var expectedMiddle = extractMiddleCode(expectedCode);
   var scannedMiddle  = extractMiddleCode(scannedCode);
-  var isMatch        = expectedMiddle === scannedMiddle;
+  var isMatch        = codesMatch(expectedCode, scannedCode);
   var card     = document.getElementById('pick-card-' + idx);
   var input    = document.getElementById('pick-scan-' + idx);
   var status   = document.getElementById('pick-status-' + idx);
@@ -911,7 +923,7 @@ function completeOrder() {
   if (problems.length) { showToast(problems[0], 'error'); return; }
 
   var short = shortfalls();
-  if (short.length && !confirm('Short on:\n\n' + short.join('\n') + '\n\nComplete anyway?')) return;
+  if (short.length) { showToast('Short: ' + short.join('   ·   '), 'error'); return; }
   
   var btn = document.getElementById('completePkgBtn');
   btn.disabled = true; btn.textContent = 'Completing…';
