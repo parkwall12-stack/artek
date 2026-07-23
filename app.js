@@ -615,7 +615,7 @@ function savePick() {
       var scannedCode  = (document.getElementById('pick-scan-' + idx)||{}).value || '';
       var lotNumber    = (document.getElementById('pick-lot-'  + idx)||{}).value || '';
       var qtyPulled    = parseFloat((document.getElementById('pick-qty-' + idx)||{}).value || 0);
-      var match        = extractMiddleCode(scannedCode) === extractMiddleCode(expectedCode);
+      var match        = codesMatch(expectedCode, scannedCode);
       var entry        = scannedCode ? (_entryMethod[idx] || 'Typed in') : '';
       return { expectedCode:expectedCode, description:item.description||'', uom:item.uom||'',
                lotNumber:lotNumber, qtyRequired:item.qtyOrdered, qtyPulled:qtyPulled, match:match, entry:entry };
