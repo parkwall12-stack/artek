@@ -116,6 +116,28 @@ function extractMiddleCode(code) {
   return parts.length >= 2 ? parts[1].trim().toUpperCase() : (code || '').trim().toUpperCase();
 }
 
+// Render YYYY-MM-DD without timezone shifting
+function fmtDate(ymd) {
+  if (!ymd) return '—';
+  var p = String(ymd).split('-');
+  if (p.length !== 3) return String(ymd);
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return months[Number(p[1]) - 1] + ' ' + Number(p[2]) + ', ' + p[0];
+}
+
+// Stock bars are 120"; trailing number in the item code is the cut length
+function pullEstimate(itemCode, qtyOrdered) {
+  var STOCK = 120;
+  var parts = String(itemCode || '').trim().split('-');
+  var len   = parseFloat(parts[parts.length - 1]);
+  var qty   = parseFloat(qtyOrdered);
+  if (!len || len <= 0 || !qty || qty <= 0) return null;
+  if (len > STOCK) return null;
+  var perBar = Math.floor(STOCK / len);
+  if (perBar < 1) return null;
+  return { bars: Math.ceil(qty / perBar), perBar: perBar, len: len };
+}
+
 // ── Tab routing ───────────────────────────────────────────
 
 function switchTab(tab) {
