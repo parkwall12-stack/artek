@@ -127,7 +127,10 @@ function trailingLength(code) {
 
 // Middle segment may be a prefix match (order code is often shorter than the
 // barcode), but if BOTH codes carry a cut length it must match exactly.
-function codesMatch(expectedCode, scannedCode) {
+// Middle segment may prefix-match. For FP (fabricated) parts only, the cut
+// length must also agree — those ship as fixed pieces and a -12 vs -24 mixup
+// is a real error. FB/MCM stock is cut to length, so no length check there.
+function codesMatch(expectedCode, scannedCode, expectedDesc) {
   var a = extractMiddleCode(expectedCode);
   var b = extractMiddleCode(scannedCode);
   if (!a || !b) return false;
@@ -136,11 +139,17 @@ function codesMatch(expectedCode, scannedCode) {
               (a.length >= 4 && b.length >= 4 && (b.indexOf(a) === 0 || a.indexOf(b) === 0));
   if (!midOk) return false;
 
-  var la = trailingLength(expectedCode);
-  var lb = trailingLength(scannedCode);
-  if (la !== null && lb !== null && la !== lb) return false;
+  var isFP = String(expectedCode || '').trim().toUpperCase().indexOf('FP-') === 0;
+  if (!isFP) return true;
 
-  return true;
+  var scannedLen = trailingLength(scannedCode);
+  if (scannedLen === null) return true;
+
+  var expectedLen = trailingLength(expectedCode);
+  if (expectedLen === null) expectedLen = lengthFromDescription(expectedDesc);
+  if (expectedLen === null) return true;
+
+  return Math.abs(expectedLen - scannedLen) < 0.01;
 }
 
 function normalizeOrderNo(v) {
