@@ -520,22 +520,16 @@ function lookupOrder() {
         return;
       }
 
-      // Already in the system — don't allow a duplicate pick
+      // Already in the system — open its record instead of a blank pick
       var ex = data.header && data.header.existingStatus;
       if (ex) {
-        var msg;
-        if (ex === 'Archived') {
-          msg = 'Order #' + num + ' has already shipped and been archived. Look it up under OOR → Archived.';
-        } else if (ex === 'Complete') {
-          msg = 'Order #' + num + ' is already packaged and complete. Open it from Scan orders to view or edit it.';
-        } else if (ex === 'Packaging') {
-          msg = 'Order #' + num + ' is already being packaged. Find it in Package orders.';
-        } else {
-          msg = 'Order #' + num + ' has already been picked. Open it from Scan orders to edit the pulled quantities.';
-        }
-        errBox.textContent = msg;
-        errBox.style.display = 'block';
-        playBadBeep();
+        var msg = ex === 'Archived'  ? 'Order #' + num + ' already shipped — opening record' :
+                  ex === 'Complete'  ? 'Order #' + num + ' is already complete — opening record' :
+                  ex === 'Packaging' ? 'Order #' + num + ' is already being packaged' :
+                                       'Order #' + num + ' has already been picked';
+        showToast(msg, 'info');
+        document.getElementById('orderNumber').value = '';
+        openOrderDetail(num);
         return;
       }
 
@@ -548,13 +542,6 @@ function lookupOrder() {
       errBox.style.display = 'block';
     });
 }
-    .catch(function() {
-      btn.disabled = false; btn.textContent = 'Look up order';
-      document.getElementById('lookupError').textContent = 'Error looking up order. Check connection.';
-      document.getElementById('lookupError').style.display = 'block';
-    });
-}
-
 function showPickPhase(data) {
   document.getElementById('phase-lookup').style.display = 'none';
   document.getElementById('phase-pick').style.display   = 'block';
