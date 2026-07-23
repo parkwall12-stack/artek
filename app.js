@@ -498,17 +498,56 @@ function renderSessionPicks() {
 
 function lookupOrder() {
   var num = normalizeOrderNo(document.getElementById('orderNumber').value);
-  if (!num) { document.getElementById('lookupError').textContent = 'Please enter an order number.'; document.getElementById('lookupError').style.display = 'block'; return; }
-  document.getElementById('lookupError').style.display = 'none';
+  var errBox = document.getElementById('lookupError');
+
+  if (!num) {
+    errBox.textContent = 'Please enter an order number.';
+    errBox.style.display = 'block';
+    return;
+  }
+  errBox.style.display = 'none';
+
   var btn = document.getElementById('lookupBtn');
   btn.disabled = true; btn.textContent = 'Looking up…';
+
   apiFetch('getFullOOROrder', { orderNo: num })
     .then(function(data) {
       btn.disabled = false; btn.textContent = 'Look up order';
-      if (data && data.error) { document.getElementById('lookupError').textContent = data.error; document.getElementById('lookupError').style.display = 'block'; return; }
+
+      if (data && data.error) {
+        errBox.textContent = data.error;
+        errBox.style.display = 'block';
+        return;
+      }
+
+      // Already in the system — don't allow a duplicate pick
+      var ex = data.header && data.header.existingStatus;
+      if (ex) {
+        var msg;
+        if (ex === 'Archived') {
+          msg = 'Order #' + num + ' has already shipped and been archived. Look it up under OOR → Archived.';
+        } else if (ex === 'Complete') {
+          msg = 'Order #' + num + ' is already packaged and complete. Open it from Scan orders to view or edit it.';
+        } else if (ex === 'Packaging') {
+          msg = 'Order #' + num + ' is already being packaged. Find it in Package orders.';
+        } else {
+          msg = 'Order #' + num + ' has already been picked. Open it from Scan orders to edit the pulled quantities.';
+        }
+        errBox.textContent = msg;
+        errBox.style.display = 'block';
+        playBadBeep();
+        return;
+      }
+
       _currentPickData = data;
       showPickPhase(data);
     })
+    .catch(function() {
+      btn.disabled = false; btn.textContent = 'Look up order';
+      errBox.textContent = 'Error looking up order. Check connection.';
+      errBox.style.display = 'block';
+    });
+}
     .catch(function() {
       btn.disabled = false; btn.textContent = 'Look up order';
       document.getElementById('lookupError').textContent = 'Error looking up order. Check connection.';
