@@ -237,3 +237,11 @@ body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:
   .tab-btn { padding:0 9px; font-size:.76rem; }
   .part-field-row { grid-template-columns:1fr; }
 }
+
+@media (max-width: 900px) {
+  input, select, textarea,
+  .search-input, .field-row input, .pick-scan-row input,
+  .pick-qty-row input, .pkg-field input, .part-select {
+    font-size: 16px !important;
+  }
+}
