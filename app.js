@@ -520,18 +520,11 @@ function showPickPhase(data) {
     var code     = extractPartCode(item.itemCode);
     var safeCode = code.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
-    var est     = pullEstimate(code, item.qtyOrdered);
-    var estHtml = est
-      ? '<div class="pull-estimate">↳ Pull ≈ <strong>' + est.bars + '</strong> bar' + (est.bars !== 1 ? 's' : '') +
-        ' @ 120&quot; &nbsp;·&nbsp; ' + est.perBar + ' cut' + (est.perBar !== 1 ? 's' : '') + ' of ' + est.len + '&quot; per bar</div>'
-      : '';
-
     return '<div class="pick-item-card" id="pick-card-' + idx + '">' +
       '<div class="pick-item-top">' +
         '<div class="pick-item-code">' + code + '</div>' +
         '<div class="pick-item-desc">' + (item.description||'') + '</div>' +
         '<span class="pick-item-req">Required: ' + item.qtyOrdered + ' ' + item.uom + '</span>' +
-        estHtml +
       '</div>' +
 
       '<div class="pick-label">Part number</div>' +
