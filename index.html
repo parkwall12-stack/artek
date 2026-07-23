@@ -126,7 +126,8 @@
   <!-- OOR TAB -->
   <div class="page" id="page-oor">
     <div class="page-header">
-      <div><h1>Open orders</h1><p class="page-sub">McMaster orders from 5/22 · sorted by order #</p></div>
+      <div><h1>Open orders</h1><p class="page-sub">Live from the OOR tab · sorted by order #</p></div>
+      <button class="oor-toggle-btn" id="oorArchiveToggle" onclick="toggleArchiveView()">📁 Archived</button>
     </div>
     <div class="search-wrap">
       <input class="search-input" id="oorSearch" type="text" placeholder="Search order # or location…" oninput="renderOOR()" autocomplete="off"/>
