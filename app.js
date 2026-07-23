@@ -132,27 +132,35 @@ function lengthFromDescription(desc) {
   var last = all[all.length - 1].match(/(\d+(?:\.\d+)?)/);
   return last ? Number(last[1]) : null;
 }
-
-function codesMatch(expectedCode, scannedCode, expectedDesc) {
+// Returns null when the scan is good, otherwise a human-readable reason.
+function matchProblem(expectedCode, scannedCode, expectedDesc) {
   var a = extractMiddleCode(expectedCode);
   var b = extractMiddleCode(scannedCode);
-  if (!a || !b) return false;
+  if (!a || !b) return 'Wrong part';
 
   var midOk = (a === b) ||
               (a.length >= 4 && b.length >= 4 && (b.indexOf(a) === 0 || a.indexOf(b) === 0));
-  if (!midOk) return false;
+  if (!midOk) return 'Wrong part — expected ' + a + ' · got ' + b;
 
+  // Length only matters for fabricated (FP) parts
   var isFP = String(expectedCode || '').trim().toUpperCase().indexOf('FP-') === 0;
-  if (!isFP) return true;
+  if (!isFP) return null;
 
   var scannedLen = trailingLength(scannedCode);
-  if (scannedLen === null) return true;
+  if (scannedLen === null) return null;
 
   var expectedLen = trailingLength(expectedCode);
   if (expectedLen === null) expectedLen = lengthFromDescription(expectedDesc);
-  if (expectedLen === null) return true;
+  if (expectedLen === null) return null;
 
-  return Math.abs(expectedLen - scannedLen) < 0.01;
+  if (Math.abs(expectedLen - scannedLen) < 0.01) return null;
+
+  return (scannedLen > expectedLen ? 'Too long' : 'Too short') +
+         ' — need ' + expectedLen + '", scanned ' + scannedLen + '"';
+}
+
+function codesMatch(expectedCode, scannedCode, expectedDesc) {
+  return matchProblem(expectedCode, scannedCode, expectedDesc) === null;
 }
 
 function normalizeOrderNo(v) {
@@ -263,10 +271,10 @@ function closeScanner() {
 function verifyPartScan(idx, expectedCode, scannedCode, viaScanner) {
   _entryMethod[idx] = viaScanner ? 'Scanned' : 'Typed in';
 
-  var _it            = ((_currentPickData && _currentPickData.items) || [])[idx];
-  var expectedMiddle = extractMiddleCode(expectedCode);
-  var scannedMiddle  = extractMiddleCode(scannedCode);
-  var isMatch        = codesMatch(expectedCode, scannedCode, _it ? _it.description : '');
+  var _it     = ((_currentPickData && _currentPickData.items) || [])[idx];
+  var desc    = _it ? _it.description : '';
+  var problem = matchProblem(expectedCode, scannedCode, desc);
+  var isMatch = (problem === null);
 
   var card     = document.getElementById('pick-card-' + idx);
   var input    = document.getElementById('pick-scan-' + idx);
@@ -277,14 +285,15 @@ function verifyPartScan(idx, expectedCode, scannedCode, viaScanner) {
   if (card)   { card.classList.remove('match','no-match'); card.classList.add(isMatch ? 'match' : 'no-match'); }
   if (status) {
     if (isMatch) {
-      status.textContent = '✓ Match — ' + expectedMiddle + ' verified';
+      status.textContent = '✓ Match — ' + extractMiddleCode(expectedCode) + ' verified';
       status.className = 'pick-status match';
       playGoodBeep(); showToast('✓ Part matched!', 'success');
       if (qtyInput) setTimeout(function() { qtyInput.focus(); }, 100);
     } else {
-      status.textContent = '✗ No match — expected: ' + expectedMiddle + ' · got: ' + scannedMiddle;
+      status.textContent = '✗ ' + problem;
       status.className = 'pick-status no-match';
-      playBadBeep(); showToast('✗ Wrong part!', 'error');
+      playBadBeep();
+      showToast('✗ ' + problem.split(' — ')[0] + '!', 'error');
     }
   }
 }
@@ -670,7 +679,7 @@ function savePick() {
       var scannedCode  = (document.getElementById('pick-scan-' + idx)||{}).value || '';
       var lotNumber    = (document.getElementById('pick-lot-'  + idx)||{}).value || '';
       var qtyPulled    = parseFloat((document.getElementById('pick-qty-' + idx)||{}).value || 0);
-      var match        = codesMatch(expectedCode, scannedCode);
+      var match        = codesMatch(expectedCode, scannedCode, item.description || '');
       var entry        = scannedCode ? (_entryMethod[idx] || 'Typed in') : '';
       return { expectedCode:expectedCode, description:item.description||'', uom:item.uom||'',
                lotNumber:lotNumber, qtyRequired:item.qtyOrdered, qtyPulled:qtyPulled, match:match, entry:entry };
