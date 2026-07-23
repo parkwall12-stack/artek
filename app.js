@@ -1,10 +1,11 @@
 // ── Config ────────────────────────────────────────────────
 var API = 'https://artek-proxy.parkwall12.workers.dev';
-var DRIVE_SCRIPT = 'https://script.google.com/macros/s/AKfycbyA8mFEQ8zbRbWtZ2Z-WR-p0wC741pANpiMIMmlRGGsl2mXR-mgSyMEVLax8ZuHpoxP2Q/exec';
 
 var _oorData         = [];
 var _scanData        = [];
 var _packageData     = [];
+var _archiveData     = [];
+var _oorShowArchived = false;
 var _scanTargetId    = null;
 var _partScanIdx     = null;
 var _partScanCode    = null;
@@ -15,26 +16,17 @@ var _currentPkgData  = null;
 var _pkgBoxes        = [];
 var _sessionPicks    = [];
 var _pkgReturnTab    = null;
-var _entryMethod     = {};   // idx → 'Scanned' | 'Typed in'
-
-// ── Status helper ─────────────────────────────────────────
-// Treat Complete, Archived, and Shipped/Archived as "finished"
-function isDoneStatus(s) {
-  return s === 'Complete' || s === 'Archived' || s === 'Shipped/Archived';
-}
+var _entryMethod     = {};
+var _sessionPhotos   = {};   // "order|box|part" → base64, covers Drive thumbnail lag
 
 // ── Passcode gate ─────────────────────────────────────────
-var PASSCODE = '3311';   // change this to whatever code you want
+var PASSCODE = '3311';
 
-function todayStamp() {
-  return new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-}
+function todayStamp() { return new Date().toISOString().split('T')[0]; }
 
 function isUnlocked() {
-  try {
-    return sessionStorage.getItem('artek_unlocked') === todayStamp() ||
-           localStorage.getItem('artek_unlocked') === todayStamp();
-  } catch(e) { return false; }
+  try { return localStorage.getItem('artek_unlocked') === todayStamp(); }
+  catch(e) { return false; }
 }
 
 function checkPasscode() {
@@ -62,11 +54,15 @@ function initPasscode() {
   }
 }
 
+// ── Status helper ─────────────────────────────────────────
+function isDoneStatus(s) { return s === 'Complete' || s === 'Archived'; }
+
 // ── Fetch ─────────────────────────────────────────────────
 
-function apiFetch(action, payload) {
+function apiFetch(action, payload, extra) {
   var url = API + '?action=' + encodeURIComponent(action);
   if (payload) url += '&payload=' + encodeURIComponent(JSON.stringify(payload));
+  if (extra)   url += extra;
   return fetch(url).then(function(r) { return r.json(); });
 }
 
@@ -245,11 +241,9 @@ function renderOrders(orders) {
     return;
   }
   list.innerHTML = orders.map(function(o) {
-    var date  = o.timestamp ? new Date(o.timestamp).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '—';
-    var badge = o.status === 'Complete'         ? '<span class="badge badge-complete">Complete</span>' :
-                o.status === 'Archived'         ? '<span class="badge badge-complete">Archived</span>' :
-                o.status === 'Shipped/Archived' ? '<span class="badge badge-complete">Shipped/Archived</span>' :
-                o.status === 'Packaging'        ? '<span class="badge badge-inprog">Packaging</span>' :
+    var date  = o.timestamp || '—';
+    var badge = o.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>' :
+                o.status === 'Packaging' ? '<span class="badge badge-inprog">Packaging</span>'  :
                 '<span class="badge badge-ready">Picked</span>';
     return '<div class="order-card" onclick="openOrderDetail(\'' + o.orderNumber + '\')">' +
       '<div class="order-icon">📋</div>' +
@@ -288,10 +282,11 @@ function renderOrderDetail(data, photos) {
   photos    = photos || [];
 
   var photoLookup = {};
-  photos.forEach(function(p) { photoLookup[p.boxIdx + '|' + p.partCode] = p.photoData || p.thumbnailUrl; });
+  photos.forEach(function(p) { photoLookup[p.boxIdx + '|' + p.partCode] = p.photoData; });
 
-  var statusBadge = isDoneStatus(h.status)      ? '<span class="badge badge-complete">' + h.status + '</span>' :
-                    h.status === 'Packaging'    ? '<span class="badge badge-inprog">Packaging</span>' :
+  var statusBadge = h.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>' :
+                    h.status === 'Archived'  ? '<span class="badge badge-complete">Archived</span>' :
+                    h.status === 'Packaging' ? '<span class="badge badge-inprog">Packaging</span>'  :
                     '<span class="badge badge-ready">Picked</span>';
 
   var bodyHtml = '';
@@ -302,10 +297,10 @@ function renderOrderDetail(data, photos) {
     items.forEach(function(item) {
       var itemBoxes = (boxes[item.itemCode] || []).slice().sort(function(a,b) { return a.boxIndex - b.boxIndex; });
 
-      // Each box this part is in gets its own sub-box with photo on the right
       var boxesHtml = '';
       itemBoxes.forEach(function(box) {
-        var url = photoLookup[box.boxIndex + '|' + item.itemCode];
+        var sessionKey = h.orderNumber + '|' + box.boxIndex + '|' + item.itemCode;
+        var url = _sessionPhotos[sessionKey] || photoLookup[box.boxIndex + '|' + item.itemCode];
         boxesHtml += '<div class="detail-box-row">' +
           '<div class="detail-box-row-info">' +
             '<div class="detail-box-row-title">Box ' + box.boxIndex + '</div>' +
@@ -325,9 +320,17 @@ function renderOrderDetail(data, photos) {
     });
   }
 
-  var actionHtml = !isDoneStatus(h.status)
-    ? '<button class="btn-save" style="width:100%;margin-top:12px" onclick="openPackageOrder(\'' + h.orderNumber + '\')">Open in Packaging →</button>'
-    : '<button class="reprint-btn" style="margin-top:12px" onclick="reprintPDF(\'' + h.orderNumber + '\')">🖨 Print tags</button>';
+  var actionHtml = '';
+  if (h.status === 'Archived') {
+    actionHtml = '<button class="reprint-btn" style="margin-top:12px" onclick="reprintPDF(\'' + h.orderNumber + '\')">🖨 Print tags</button>';
+  } else if (h.status === 'Complete') {
+    actionHtml = '<div class="oor-action-row" style="padding:0;margin-top:12px">' +
+      '<button class="oor-action-btn" onclick="reprintPDF(\'' + h.orderNumber + '\')">🖨 Print tags</button>' +
+      '<button class="oor-action-btn oor-action-btn-view" onclick="openPackageOrder(\'' + h.orderNumber + '\')">✎ Edit order</button>' +
+    '</div>';
+  } else {
+    actionHtml = '<button class="btn-save" style="width:100%;margin-top:12px" onclick="openPackageOrder(\'' + h.orderNumber + '\')">Open in Packaging →</button>';
+  }
 
   document.getElementById('detailContent').innerHTML =
     '<div class="pick-order-header">' +
@@ -448,8 +451,7 @@ function showPickPhase(data) {
 
 function autofillLot(idx) {
   if (!_currentPickData) return;
-  var items = _currentPickData.items || [];
-  var item  = items[idx];
+  var item = (_currentPickData.items || [])[idx];
   if (!item) return;
   var btn = document.getElementById('autofill-btn-' + idx);
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
@@ -494,7 +496,8 @@ function savePick() {
       var qtyPulled    = parseFloat((document.getElementById('pick-qty-' + idx)||{}).value || 0);
       var match        = extractMiddleCode(scannedCode) === extractMiddleCode(expectedCode);
       var entry        = scannedCode ? (_entryMethod[idx] || 'Typed in') : '';
-      return { expectedCode:expectedCode, description:item.description||'', uom:item.uom||'', lotNumber:lotNumber, qtyRequired:item.qtyOrdered, qtyPulled:qtyPulled, match:match, entry:entry };
+      return { expectedCode:expectedCode, description:item.description||'', uom:item.uom||'',
+               lotNumber:lotNumber, qtyRequired:item.qtyOrdered, qtyPulled:qtyPulled, match:match, entry:entry };
     })
   };
   btn.disabled = true; btn.textContent = 'Saving…';
@@ -525,8 +528,6 @@ function exitForm() {
 }
 
 // ── Package Orders list ───────────────────────────────────
-
-function loadPackage() { loadPackageOrders(); }
 
 function loadPackageOrders() {
   document.getElementById('packageList').innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
@@ -733,7 +734,8 @@ function collectPackagePayload(complete) {
   _pkgBoxes.forEach(function(box, bIdx) {
     box.parts.forEach(function(part) {
       if (part.itemCode) {
-        boxes.push({ itemCode:part.itemCode, boxIndex:bIdx+1, totalBoxes:totalBoxes, qtyInBox:parseFloat(part.qty)||0, weight:parseFloat(part.weight)||0 });
+        boxes.push({ itemCode:part.itemCode, boxIndex:bIdx+1, totalBoxes:totalBoxes,
+                     qtyInBox:parseFloat(part.qty)||0, weight:parseFloat(part.weight)||0 });
       }
     });
   });
@@ -763,49 +765,60 @@ function completeOrder() {
   if (!payload) return;
   var btn = document.getElementById('completePkgBtn');
   btn.disabled = true; btn.textContent = 'Completing…';
+
   apiFetch('savePackageData', payload)
     .then(function(res) {
-      btn.disabled = false; btn.textContent = '✓ Complete order';
-      if (res.success) {
-        var pdfBase64 = generatePDFBase64();
-        var photos    = collectPhotos();
-        var h         = _currentPkgData.header;
-
-        // Store photos in the BoxPhotos sheet so the website can display them
-        if (photos.length > 0) {
-          apiFetchPost({ action:'saveBoxPhotos', orderNumber:h.orderNumber, photos:photos });
-        }
-
-        // Save PDF + photos to Drive, organized by promise date
-        apiFetch('getFullOOROrder', { orderNo: String(h.orderNumber) })
-          .then(function(oor) {
-            return (oor && oor.header && oor.header.promiseDate)
-              ? new Date(oor.header.promiseDate).toISOString().split('T')[0]
-              : new Date().toISOString().split('T')[0];
-          })
-          .catch(function() { return new Date().toISOString().split('T')[0]; })
-          .then(function(folderDate) {
-            fetch(DRIVE_SCRIPT, {
-              method: 'POST',
-              mode: 'no-cors',
-              headers: { 'Content-Type': 'text/plain' },
-              body: JSON.stringify({
-                orderNo: h.orderNumber,
-                location: h.location || 'MCM',
-                completionDate: folderDate,
-                pdfBase64: pdfBase64,
-                photos: photos
-              })
-            });
-          });
-
-        showToast('Order complete — saving to Drive…', 'success');
-        setTimeout(exitPackageDetail, 900);
-      } else {
+      if (!res.success) {
+        btn.disabled = false; btn.textContent = '✓ Complete order';
         showToast('Error: ' + (res.error||''), 'error');
+        return;
       }
+
+      var h         = _currentPkgData.header;
+      var pdfBase64 = generatePDFBase64();
+      var photos    = collectPhotos();
+
+      // Cache photos in memory so View Order shows them before Drive thumbnails exist
+      photos.forEach(function(p) {
+        _sessionPhotos[h.orderNumber + '|' + p.boxIdx + '|' + p.partCode] =
+          'data:image/' + (p.ext === 'png' ? 'png' : 'jpeg') + ';base64,' + p.base64;
+      });
+
+      btn.textContent = 'Saving files…';
+
+      apiFetch('getFullOOROrder', { orderNo: String(h.orderNumber) })
+        .then(function(oor) {
+          return (oor && oor.header && oor.header.promiseDate)
+            ? new Date(oor.header.promiseDate).toISOString().split('T')[0]
+            : new Date().toISOString().split('T')[0];
+        })
+        .catch(function() { return new Date().toISOString().split('T')[0]; })
+        .then(function(folderDate) {
+          return apiFetchPost({
+            action: 'saveOrderFiles',
+            orderNo: h.orderNumber,
+            location: h.location || 'MCM',
+            completionDate: folderDate,
+            pdfBase64: pdfBase64,
+            photos: photos
+          });
+        })
+        .then(function(fileRes) {
+          btn.disabled = false; btn.textContent = '✓ Complete order';
+          showToast(fileRes && fileRes.success ? 'Order complete — files saved to Drive' : 'Order complete (Drive: ' + ((fileRes && fileRes.error) || 'failed') + ')',
+                    fileRes && fileRes.success ? 'success' : 'error');
+          setTimeout(exitPackageDetail, 900);
+        })
+        .catch(function() {
+          btn.disabled = false; btn.textContent = '✓ Complete order';
+          showToast('Order complete (Drive save failed)', 'error');
+          setTimeout(exitPackageDetail, 900);
+        });
     })
-    .catch(function() { btn.disabled = false; btn.textContent = '✓ Complete order'; showToast('Error', 'error'); });
+    .catch(function() {
+      btn.disabled = false; btn.textContent = '✓ Complete order';
+      showToast('Error completing order', 'error');
+    });
 }
 
 function exitPackageDetail() {
@@ -813,8 +826,9 @@ function exitPackageDetail() {
   var returnTab = _pkgReturnTab || 'package';
   document.getElementById('tab-' + returnTab).classList.add('active');
   document.getElementById('page-' + returnTab).classList.add('active');
-  if (returnTab === 'scan')    loadOrders();
-  else                         loadPackageOrders();
+  if (returnTab === 'scan')     loadOrders();
+  else if (returnTab === 'oor') loadOOR();
+  else                          loadPackageOrders();
   _pkgReturnTab = null;
 }
 
@@ -837,8 +851,6 @@ function renderPDFTag(doc, data) {
   doc.text('Pkg: ' + data.pkgIndex + ' of ' + data.pkgTotal, x, y);
 }
 
-// Build per-part tag entries: each part gets one tag per box it's in,
-// numbered "X of N" where N = how many boxes contain THAT part
 function buildTagEntries(boxesFlat) {
   var byPart = {};
   boxesFlat.forEach(function(e) {
@@ -856,21 +868,11 @@ function buildTagEntries(boxesFlat) {
   return entries;
 }
 
-function generatePDFBase64() {
+function buildTagDoc(hdr, items, boxesFlat) {
   var jsPDFLib = window.jspdf ? window.jspdf.jsPDF : (window.jsPDF || null);
-  if (!jsPDFLib || !_currentPkgData) return null;
-  var h        = _currentPkgData.header;
-  var items    = _currentPkgData.items || [];
+  if (!jsPDFLib) return null;
   var itemInfo = {};
   items.forEach(function(item) { itemInfo[item.itemCode] = item; });
-
-  var boxesFlat = [];
-  _pkgBoxes.forEach(function(box, bIdx) {
-    box.parts.forEach(function(part) {
-      if (part.itemCode) boxesFlat.push({ itemCode:part.itemCode, boxIndex:bIdx+1, qty:part.qty||0 });
-    });
-  });
-
   var entries = buildTagEntries(boxesFlat);
   if (entries.length === 0) return null;
 
@@ -880,8 +882,8 @@ function generatePDFBase64() {
     if (!doc) { doc = new jsPDFLib({ orientation:'portrait', unit:'mm', format:[101.6, 152.4] }); }
     else       { doc.addPage([101.6, 152.4], 'portrait'); }
     renderPDFTag(doc, {
-      location:  h.location || '—',
-      po:        h.po || '—',
+      location:  hdr.location || '—',
+      po:        hdr.po || '—',
       lotNumber: info.lotNumber || '—',
       partCode:  entry.itemCode,
       qty:       entry.qty,
@@ -890,6 +892,18 @@ function generatePDFBase64() {
       pkgTotal:  entry.pkgTotal
     });
   });
+  return doc;
+}
+
+function generatePDFBase64() {
+  if (!_currentPkgData) return null;
+  var boxesFlat = [];
+  _pkgBoxes.forEach(function(box, bIdx) {
+    box.parts.forEach(function(part) {
+      if (part.itemCode) boxesFlat.push({ itemCode:part.itemCode, boxIndex:bIdx+1, qty:part.qty||0 });
+    });
+  });
+  var doc = buildTagDoc(_currentPkgData.header, _currentPkgData.items || [], boxesFlat);
   if (!doc) return null;
   return doc.output('datauristring').split(',')[1];
 }
@@ -912,13 +926,8 @@ function reprintPDF(orderNo) {
   apiFetch('getPackageOrder', { orderNo: String(orderNo) })
     .then(function(data) {
       if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
-      var hdr   = data.header;
-      var items = data.items  || [];
-      var boxes = data.boxes  || {};
-      var itemInfo = {};
-      items.forEach(function(item) { itemInfo[item.itemCode] = item; });
-      var jsPDFLib = window.jspdf ? window.jspdf.jsPDF : (window.jsPDF || null);
-      if (!jsPDFLib) { showToast('PDF library not loaded', 'error'); return; }
+      var items = data.items || [];
+      var boxes = data.boxes || {};
 
       var boxesFlat = [];
       Object.keys(boxes).forEach(function(itemCode) {
@@ -926,43 +935,21 @@ function reprintPDF(orderNo) {
           boxesFlat.push({ itemCode:itemCode, boxIndex:box.boxIndex, qty:box.qtyInBox });
         });
       });
-
-      // Fallback — no box data, one tag per item
       if (boxesFlat.length === 0) {
         items.forEach(function(item) {
           boxesFlat.push({ itemCode:item.itemCode, boxIndex:1, qty:item.qtyPulled||0 });
         });
       }
 
-      var entries = buildTagEntries(boxesFlat);
-      if (entries.length === 0) { showToast('No data for this order', 'error'); return; }
+      var doc = buildTagDoc(data.header, items, boxesFlat);
+      if (!doc) { showToast('No data for this order', 'error'); return; }
 
-      var doc = null;
-      entries.forEach(function(entry) {
-        var info = itemInfo[entry.itemCode] || {};
-        if (!doc) { doc = new jsPDFLib({ orientation:'portrait', unit:'mm', format:[101.6, 152.4] }); }
-        else       { doc.addPage([101.6, 152.4], 'portrait'); }
-        renderPDFTag(doc, {
-          location:  hdr.location || '—',
-          po:        hdr.po || '—',
-          lotNumber: info.lotNumber || '—',
-          partCode:  entry.itemCode,
-          qty:       entry.qty,
-          uom:       info.uom || 'Feet',
-          pkgIndex:  entry.pkgIndex,
-          pkgTotal:  entry.pkgTotal
-        });
-      });
-
-      if (doc) {
-        var blobUrl = doc.output('bloburl');
-        var win = window.open(blobUrl, '_blank');
-        if (!win) {
-          doc.save('ArTek_Order_' + orderNo + '_tags.pdf');
-          showToast('Popup blocked — downloaded instead', 'info');
-        } else {
-          showToast('Tags ready to print!', 'success');
-        }
+      var win = window.open(doc.output('bloburl'), '_blank');
+      if (!win) {
+        doc.save('ArTek_Order_' + orderNo + '_tags.pdf');
+        showToast('Popup blocked — downloaded instead', 'info');
+      } else {
+        showToast('Tags ready to print!', 'success');
       }
     })
     .catch(function() { showToast('Error loading order', 'error'); });
@@ -986,24 +973,68 @@ function openPhotoLightbox(src) {
 
 // ── OOR ───────────────────────────────────────────────────
 
+function toggleArchiveView() {
+  _oorShowArchived = !_oorShowArchived;
+  var btn = document.getElementById('oorArchiveToggle');
+  if (btn) {
+    btn.textContent = _oorShowArchived ? '← Open orders' : '📁 Archived';
+    btn.className   = _oorShowArchived ? 'oor-toggle-btn active' : 'oor-toggle-btn';
+  }
+  loadOOR();
+}
+
 function loadOOR() {
   _oorItemCache = {};
   document.getElementById('oorList').innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
-  apiFetch('getOOROrderHeaders')
-    .then(function(data) {
-      if (data && data.error) { showToast('Error: ' + data.error, 'error'); return; }
-      _oorData = Array.isArray(data) ? data : [];
-      renderOOR();
-    })
-    .catch(function() { showToast('Error loading OOR', 'error'); });
+
+  if (_oorShowArchived) {
+    apiFetch('getArchivedOrders')
+      .then(function(data) {
+        if (data && data.error) { showToast('Error: ' + data.error, 'error'); return; }
+        _archiveData = Array.isArray(data) ? data : [];
+        renderOOR();
+      })
+      .catch(function() { showToast('Error loading archive', 'error'); });
+  } else {
+    apiFetch('getOOROrderHeaders', null, '&fresh=1')
+      .then(function(data) {
+        if (data && data.error) { showToast('Error: ' + data.error, 'error'); return; }
+        _oorData = Array.isArray(data) ? data : [];
+        renderOOR();
+      })
+      .catch(function() { showToast('Error loading OOR', 'error'); });
+  }
 }
 
 function renderOOR() {
-  var q = document.getElementById('oorSearch') ? document.getElementById('oorSearch').value.toLowerCase().trim() : '';
+  var q    = document.getElementById('oorSearch') ? document.getElementById('oorSearch').value.toLowerCase().trim() : '';
+  var list = document.getElementById('oorList');
+
+  if (_oorShowArchived) {
+    var arch = _archiveData.filter(function(o) {
+      return !q || String(o.orderNumber).toLowerCase().indexOf(q) !== -1 || String(o.location||'').toLowerCase().indexOf(q) !== -1;
+    });
+    if (!arch.length) { list.innerHTML = '<div class="empty-state"><div class="empty-icon">📁</div><p>No archived orders.</p></div>'; return; }
+    list.innerHTML = arch.map(function(o, idx) {
+      return '<div class="oor-card" id="oor-' + idx + '">' +
+        '<div class="oor-card-header" onclick="toggleOOR(' + idx + ',\'' + o.orderNumber + '\',\'Archived\')">' +
+          '<div class="oor-order-icon">📁</div>' +
+          '<div class="oor-order-info">' +
+            '<div class="oor-order-num">Order #' + o.orderNumber + '</div>' +
+            '<div class="oor-order-meta">Archived ' + (o.timestamp||'') + (o.po ? ' &nbsp;·&nbsp; PO: ' + o.po : '') + '</div>' +
+          '</div>' +
+          '<div class="oor-badges"><span class="badge badge-loc">' + (o.location||'—') + '</span></div>' +
+          '<span class="oor-chevron">▶</span>' +
+        '</div>' +
+        '<div class="oor-items" id="oor-items-' + idx + '"><div class="oor-item-loading">Loading…</div></div>' +
+      '</div>';
+    }).join('');
+    return;
+  }
+
   var filtered = _oorData.filter(function(o) {
     return !q || String(o.orderNo).toLowerCase().indexOf(q) !== -1 || String(o.location||'').toLowerCase().indexOf(q) !== -1;
   });
-  var list = document.getElementById('oorList');
   if (!filtered.length) { list.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><p>No orders found.</p></div>'; return; }
   list.innerHTML = filtered.map(function(o, idx) {
     var locBadge = '<span class="badge badge-loc">' + (o.location||'—') + '</span>';
@@ -1030,12 +1061,15 @@ function toggleOOR(idx, orderNo, wmsStatus) {
   if (!card) return;
   if (card.classList.contains('open')) { card.classList.remove('open'); return; }
   card.classList.add('open');
+
   if (_oorItemCache[orderNo]) {
     if (_oorItemCache[orderNo].items) renderOORItemsWithBoxes(itemsDiv, _oorItemCache[orderNo]);
     else renderOORItems(itemsDiv, _oorItemCache[orderNo], orderNo);
     return;
   }
+
   itemsDiv.innerHTML = '<div class="oor-item-loading">Loading…</div>';
+
   if (isDoneStatus(wmsStatus)) {
     apiFetch('getPackageOrder', { orderNo: String(orderNo) })
       .then(function(data) {
@@ -1074,8 +1108,8 @@ function renderOORItemsWithBoxes(container, data) {
   var boxes  = data.boxes  || {};
   var header = data.header || {};
   if (!items.length) { container.innerHTML = '<div class="oor-item-loading">No items.</div>'; return; }
-  var noteText = (header.status === 'Archived' || header.status === 'Shipped/Archived')
-    ? '✓ Order packaged, shipped and archived'
+  var noteText = header.status === 'Archived'
+    ? '📁 Order shipped and archived'
     : '✓ Order packaged and complete';
   container.innerHTML = '<div class="oor-complete-note">' + noteText + '</div>' +
     items.map(function(item) {
