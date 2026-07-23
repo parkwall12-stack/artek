@@ -263,13 +263,16 @@ function closeScanner() {
 function verifyPartScan(idx, expectedCode, scannedCode, viaScanner) {
   _entryMethod[idx] = viaScanner ? 'Scanned' : 'Typed in';
 
+  var _it            = ((_currentPickData && _currentPickData.items) || [])[idx];
   var expectedMiddle = extractMiddleCode(expectedCode);
   var scannedMiddle  = extractMiddleCode(scannedCode);
-  var isMatch        = codesMatch(expectedCode, scannedCode);
+  var isMatch        = codesMatch(expectedCode, scannedCode, _it ? _it.description : '');
+
   var card     = document.getElementById('pick-card-' + idx);
   var input    = document.getElementById('pick-scan-' + idx);
   var status   = document.getElementById('pick-status-' + idx);
   var qtyInput = document.getElementById('pick-qty-' + idx);
+
   if (input)  { input.value = scannedCode; input.className = isMatch ? 'input-match' : 'input-no-match'; }
   if (card)   { card.classList.remove('match','no-match'); card.classList.add(isMatch ? 'match' : 'no-match'); }
   if (status) {
@@ -285,7 +288,6 @@ function verifyPartScan(idx, expectedCode, scannedCode, viaScanner) {
     }
   }
 }
-
 // ── Scan Orders list ──────────────────────────────────────
 
 function loadOrders() {
