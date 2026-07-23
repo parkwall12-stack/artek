@@ -115,7 +115,6 @@ function extractMiddleCode(code) {
   var parts = (code || '').trim().split('-');
   return parts.length >= 2 ? parts[1].trim().toUpperCase() : (code || '').trim().toUpperCase();
 }
-// True when codes match exactly, or one is a prefix of the other
 // The number after the last dash is the cut length (-12, -24).
 // Returns null when the code has no length segment.
 function trailingLength(code) {
@@ -125,9 +124,15 @@ function trailingLength(code) {
   return /^\d+(\.\d+)?$/.test(last) ? Number(last) : null;
 }
 
-// Middle segment may prefix-match. For FP (fabricated) parts only, the cut
-// length must also agree — those ship as fixed pieces and a -12 vs -24 mixup
-// is a real error. FB/MCM stock is cut to length, so no length check there.
+// Last "x NN.NN" in a description is the length:
+// "Flat Bar 0.375 x 12.00 x 12.00" -> 12
+function lengthFromDescription(desc) {
+  var all = String(desc || '').match(/x\s*(\d+(?:\.\d+)?)/gi);
+  if (!all || !all.length) return null;
+  var last = all[all.length - 1].match(/(\d+(?:\.\d+)?)/);
+  return last ? Number(last[1]) : null;
+}
+
 function codesMatch(expectedCode, scannedCode, expectedDesc) {
   var a = extractMiddleCode(expectedCode);
   var b = extractMiddleCode(scannedCode);
