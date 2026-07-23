@@ -623,24 +623,6 @@ function savePick() {
     })
     .catch(function(err) { btn.disabled = false; btn.textContent = 'Save pick'; showToast('Error: ' + (err.message||'check connection'), 'error'); });
 }
-  btn.disabled = true; btn.textContent = 'Saving…';
-  apiFetch('saveScanOrder', payload)
-    .then(function(res) {
-      btn.disabled = false; btn.textContent = 'Save pick';
-      if (res && res.success) {
-        _sessionPicks.unshift({ orderNumber:String(h.orderNo), po:h.po||'', location:h.location||'', itemCount:items.length });
-        showToast('Order #' + h.orderNo + ' picked — ready to package', 'success');
-        document.getElementById('phase-pick').style.display   = 'none';
-        document.getElementById('phase-lookup').style.display = 'block';
-        document.getElementById('orderNumber').value = '';
-        document.getElementById('lookupError').style.display  = 'none';
-        _currentPickData = null;
-        renderSessionPicks();
-        setTimeout(function() { document.getElementById('orderNumber').focus(); }, 100);
-      } else { showToast('Error: ' + ((res && res.error) || 'Unknown error'), 'error'); }
-    })
-    .catch(function(err) { btn.disabled = false; btn.textContent = 'Save pick'; showToast('Error: ' + (err.message||'check connection'), 'error'); });
-}
 
 function exitForm() {
   _sessionPicks = [];
