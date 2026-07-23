@@ -125,8 +125,6 @@ function trailingLength(code) {
   return /^\d+(\.\d+)?$/.test(last) ? Number(last) : null;
 }
 
-// Middle segment may be a prefix match (order code is often shorter than the
-// barcode), but if BOTH codes carry a cut length it must match exactly.
 // Middle segment may prefix-match. For FP (fabricated) parts only, the cut
 // length must also agree — those ship as fixed pieces and a -12 vs -24 mixup
 // is a real error. FB/MCM stock is cut to length, so no length check there.
