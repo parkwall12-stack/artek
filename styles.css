@@ -210,6 +210,8 @@ body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:
 .detail-box-row-photo:hover { transform:scale(1.03); }
 .passcode-overlay { position:fixed; inset:0; z-index:400; background:var(--navy); display:flex; align-items:center; justify-content:center; padding:20px; }
 .passcode-overlay.hidden { display:none; }
+.pull-estimate { margin-top:6px; font-size:.8rem; color:#1d4ed8; background:#eff6ff; border-radius:var(--radius); padding:6px 10px; }
+.pull-estimate strong { font-weight:700; }
 .passcode-box { background:var(--surface); border-radius:var(--radius-lg); padding:36px 28px; width:100%; max-width:340px; text-align:center; box-shadow:0 12px 40px rgba(0,0,0,0.3); }
 .passcode-logo { font-size:2.6rem; margin-bottom:10px; }
 .passcode-title { font-size:1.3rem; font-weight:800; color:var(--navy); margin-bottom:4px; }
