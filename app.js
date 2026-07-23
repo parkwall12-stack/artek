@@ -116,6 +116,11 @@ function extractMiddleCode(code) {
   return parts.length >= 2 ? parts[1].trim().toUpperCase() : (code || '').trim().toUpperCase();
 }
 
+function normalizeOrderNo(v) {
+  var s = String(v || '').trim();
+  if (/^0+\d+$/.test(s)) s = s.replace(/^0+/, '');
+  return s;
+}
 // Render YYYY-MM-DD without timezone shifting
 function fmtDate(ymd) {
   if (!ymd) return '—';
@@ -480,7 +485,7 @@ function renderSessionPicks() {
 }
 
 function lookupOrder() {
-  var num = document.getElementById('orderNumber').value.trim();
+  var num = normalizeOrderNo(document.getElementById('orderNumber').value);
   if (!num) { document.getElementById('lookupError').textContent = 'Please enter an order number.'; document.getElementById('lookupError').style.display = 'block'; return; }
   document.getElementById('lookupError').style.display = 'none';
   var btn = document.getElementById('lookupBtn');
@@ -864,10 +869,50 @@ function savePackageDraft() {
     })
     .catch(function() { btn.disabled = false; btn.textContent = 'Save for later'; showToast('Error saving', 'error'); });
 }
+//Restricts moving forward until order is complete
+function validateComplete() {
+  var items = (_currentPkgData && _currentPkgData.items) || [];
+  var totals = {}, problems = [];
+
+  _pkgBoxes.forEach(function(box, bIdx) {
+    box.parts.forEach(function(part) {
+      if (!part.itemCode) { problems.push('Box ' + (bIdx+1) + ' has an empty part slot'); return; }
+      totals[part.itemCode] = (totals[part.itemCode] || 0) + (parseFloat(part.qty) || 0);
+    });
+  });
+
+  items.forEach(function(item) {
+    if (!(totals[item.itemCode] > 0)) problems.push(item.itemCode + ' is not in any box');
+  });
+
+  return problems;
+}
+
+function shortfalls() {
+  var items = (_currentPkgData && _currentPkgData.items) || [];
+  var totals = {}, out = [];
+  _pkgBoxes.forEach(function(box) {
+    box.parts.forEach(function(part) {
+      if (part.itemCode) totals[part.itemCode] = (totals[part.itemCode] || 0) + (parseFloat(part.qty) || 0);
+    });
+  });
+  items.forEach(function(item) {
+    var boxed = totals[item.itemCode] || 0;
+    var req   = Number(item.qtyRequired) || 0;
+    if (req > 0 && boxed < req) out.push(item.itemCode + ' — ' + boxed + ' of ' + req + ' ' + (item.uom||''));
+  });
+  return out;
+}
 
 function completeOrder() {
   var payload = collectPackagePayload(true);
   if (!payload) return;
+  var problems = validateComplete();
+  if (problems.length) { showToast(problems[0], 'error'); return; }
+
+  var short = shortfalls();
+  if (short.length && !confirm('Short on:\n\n' + short.join('\n') + '\n\nComplete anyway?')) return;
+  
   var btn = document.getElementById('completePkgBtn');
   btn.disabled = true; btn.textContent = 'Completing…';
 
