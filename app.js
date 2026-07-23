@@ -1032,7 +1032,7 @@ function toggleOOR(idx, orderNo, wmsStatus) {
   card.classList.add('open');
   if (_oorItemCache[orderNo]) {
     if (_oorItemCache[orderNo].items) renderOORItemsWithBoxes(itemsDiv, _oorItemCache[orderNo]);
-    else renderOORItems(itemsDiv, _oorItemCache[orderNo]);
+    else renderOORItems(itemsDiv, _oorItemCache[orderNo], orderNo);
     return;
   }
   itemsDiv.innerHTML = '<div class="oor-item-loading">Loading…</div>';
@@ -1049,20 +1049,24 @@ function toggleOOR(idx, orderNo, wmsStatus) {
       .then(function(items) {
         if (!Array.isArray(items)) items = [];
         _oorItemCache[orderNo] = items;
-        renderOORItems(itemsDiv, items);
+        renderOORItems(itemsDiv, items, orderNo);
       })
       .catch(function() { itemsDiv.innerHTML = '<div class="oor-item-loading">Error loading.</div>'; });
   }
 }
 
-function renderOORItems(container, items) {
+function renderOORItems(container, items, orderNo) {
   if (!items || !items.length) { container.innerHTML = '<div class="oor-item-loading">No items found.</div>'; return; }
   container.innerHTML = items.map(function(item) {
     return '<div class="oor-item">' +
       '<div style="flex:1;min-width:0"><div class="oor-item-code">' + (item.itemCode||'—') + '</div><div class="oor-item-desc">' + (item.description||'') + '</div></div>' +
       '<div class="oor-item-qty">' + (item.qtyOrdered||0) + ' ' + (item.uom||'') + '</div>' +
     '</div>';
-  }).join('');
+  }).join('') +
+  '<div class="oor-action-row">' +
+    '<button class="oor-action-btn" onclick="reprintPDF(\'' + orderNo + '\')">🖨 Print tags</button>' +
+    '<button class="oor-action-btn oor-action-btn-view" onclick="viewOrderFromOOR(\'' + orderNo + '\')">📋 View order</button>' +
+  '</div>';
 }
 
 function renderOORItemsWithBoxes(container, data) {
