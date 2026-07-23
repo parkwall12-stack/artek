@@ -116,16 +116,31 @@ function extractMiddleCode(code) {
   return parts.length >= 2 ? parts[1].trim().toUpperCase() : (code || '').trim().toUpperCase();
 }
 // True when codes match exactly, or one is a prefix of the other
-// (FP-9721K16 on the order vs FP-9721K16VNL000-12 on the barcode)
+// The number after the last dash is the cut length (-12, -24).
+// Returns null when the code has no length segment.
+function trailingLength(code) {
+  var parts = String(code || '').trim().split('-');
+  if (parts.length < 3) return null;
+  var last = parts[parts.length - 1].trim();
+  return /^\d+(\.\d+)?$/.test(last) ? Number(last) : null;
+}
+
+// Middle segment may be a prefix match (order code is often shorter than the
+// barcode), but if BOTH codes carry a cut length it must match exactly.
 function codesMatch(expectedCode, scannedCode) {
   var a = extractMiddleCode(expectedCode);
   var b = extractMiddleCode(scannedCode);
   if (!a || !b) return false;
-  if (a === b) return true;
-  if (a.length >= 4 && b.length >= 4) {
-    if (b.indexOf(a) === 0 || a.indexOf(b) === 0) return true;
-  }
-  return false;
+
+  var midOk = (a === b) ||
+              (a.length >= 4 && b.length >= 4 && (b.indexOf(a) === 0 || a.indexOf(b) === 0));
+  if (!midOk) return false;
+
+  var la = trailingLength(expectedCode);
+  var lb = trailingLength(scannedCode);
+  if (la !== null && lb !== null && la !== lb) return false;
+
+  return true;
 }
 
 function normalizeOrderNo(v) {
