@@ -126,18 +126,18 @@ function fmtDate(ymd) {
 }
 
 // Stock bars are 120"; trailing number in the item code is the cut length
-function pullEstimate(itemCode, qtyOrdered) {
-  var STOCK = 120;
-  var parts = String(itemCode || '').trim().split('-');
-  var len   = parseFloat(parts[parts.length - 1]);
-  var qty   = parseFloat(qtyOrdered);
-  if (!len || len <= 0 || !qty || qty <= 0) return null;
-  if (len > STOCK) return null;
-  var perBar = Math.floor(STOCK / len);
-  if (perBar < 1) return null;
-  return { bars: Math.ceil(qty / perBar), perBar: perBar, len: len };
-}
-
+// function pullEstimate(itemCode, qtyOrdered) {
+//  var STOCK = 120;
+ // var parts = String(itemCode || '').trim().split('-');
+ // var len   = parseFloat(parts[parts.length - 1]);
+  //var qty   = parseFloat(qtyOrdered);
+ // if (!len || len <= 0 || !qty || qty <= 0) return null;
+ // if (len > STOCK) return null;
+ // var perBar = Math.floor(STOCK / len);
+ // if (perBar < 1) return null;
+ // return { bars: Math.ceil(qty / perBar), perBar: perBar, len: len };
+//}
+//
 // ── Tab routing ───────────────────────────────────────────
 
 function switchTab(tab) {
