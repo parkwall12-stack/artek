@@ -220,6 +220,19 @@ function openPartScanner(idx, expectedCode) {
   Scanner('Scanning: Part ' + (idx + 1));
 }
 
+// Reject decodes that don't fit what we're scanning for — blocks Code 39
+// misreads like "CB-220VNLz0z,zz0" from ever being accepted
+function scanIsValid(code) {
+  var s = String(code || '').trim();
+  if (_partScanIdx !== null) {
+    // Part codes: FB-221VNL000-120, FP-9721K26VNL000-12
+    return /^[A-Za-z]{2,6}-[A-Za-z0-9]{3,24}-\d{1,4}$/.test(s);
+  }
+  if (_scanTargetId === 'orderNumber') return /^\d{4,10}$/.test(s);
+  if (_scanTargetId && _scanTargetId.indexOf('pick-lot-') === 0) return /^[A-Za-z0-9\-]{4,24}$/.test(s);
+  return true;
+}
+
 function _startScanner(label) {
   document.getElementById('scannerFieldLabel').textContent = label;
   document.getElementById('scannerStatus').textContent = 'Starting camera…';
@@ -249,8 +262,11 @@ function _startScanner(label) {
         },
         document.getElementById('scannerVideo'),
         function(result, err) {
-          if (result) {
-            var code = result.getText();
+          if (!scanIsValid(code)) {
+              document.getElementById('scannerStatus').textContent = 'Hold steady — adjusting…';
+              document.getElementById('scannerStatus').className = 'scanner-status';
+              return;
+            }
             console.log('Barcode format:', String(result.getBarcodeFormat()));
             document.getElementById('scannerStatus').textContent = 'Got it: ' + code;
             document.getElementById('scannerStatus').className = 'scanner-status success';
