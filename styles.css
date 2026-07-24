@@ -151,6 +151,11 @@ body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:
 .remove-btn:hover { background:#fee2e2; color:#b91c1c; }
 .delete-box-btn { height:28px; padding:0 10px; border-radius:var(--radius); border:none; background:#fee2e2; color:#b91c1c; cursor:pointer; font-size:.78rem; font-weight:600; transition:background .15s; }
 .delete-box-btn:hover { background:#fecaca; }
+.oor-filter-bar { display:flex; gap:6px; margin-bottom:12px; overflow-x:auto; padding-bottom:2px; }
+.oor-filter-btn { height:34px; padding:0 12px; border-radius:999px; border:1px solid var(--border); background:var(--surface); color:var(--muted); font-size:.8rem; font-weight:600; cursor:pointer; white-space:nowrap; flex-shrink:0; transition:background .15s, border-color .15s; }
+.oor-filter-btn:hover { background:var(--bg); color:var(--text); }
+.oor-filter-btn.active { background:var(--navy); border-color:var(--navy); color:#fff; }
+.oor-filter-count { display:inline-block; margin-left:4px; font-size:.72rem; opacity:.75; }
 
 /* ── Order detail (read-only) ────────────────── */
 .detail-box-section { background:var(--surface); border:1.5px solid var(--border); border-radius:var(--radius-lg); padding:14px 16px; margin-bottom:16px; }
