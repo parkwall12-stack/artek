@@ -203,23 +203,21 @@ function switchTab(tab) {
 }
 
 // ── Scanner ───────────────────────────────────────────────
-
 function openScanner(targetInputId) {
   _scanTargetId = targetInputId;
   _partScanIdx  = null;
   _partScanCode = null;
   var label = targetInputId === 'orderNumber' ? 'Order number' :
               targetInputId.startsWith('pick-lot-') ? 'Lot number' : 'Part number';
-  Scanner('Scanning: ' + label);
+  _startScanner('Scanning: ' + label);
 }
 
 function openPartScanner(idx, expectedCode) {
   _partScanIdx  = idx;
   _partScanCode = expectedCode;
   _scanTargetId = null;
-  Scanner('Scanning: Part ' + (idx + 1));
+  _startScanner('Scanning: Part ' + (idx + 1));
 }
-
 // Reject decodes that don't fit what we're scanning for — blocks Code 39
 // misreads like "CB-220VNLz0z,zz0" from ever being accepted
 function scanIsValid(code) {
