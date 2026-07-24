@@ -277,6 +277,28 @@ function _startScanner(label) {
         }
       );
       document.getElementById('scannerStatus').textContent = 'Point camera at barcode…';
+
+      // iPhone captures very wide — zoom in so thin bars span more pixels
+      setTimeout(function() {
+        try {
+          var vid = document.getElementById('scannerVideo');
+          var track = vid && vid.srcObject && vid.srcObject.getVideoTracks()[0];
+          if (!track) return;
+          var caps = track.getCapabilities ? track.getCapabilities() : {};
+          var adv = [];
+          if (caps.zoom) {
+            var z = Math.min(caps.zoom.max, Math.max(caps.zoom.min || 1, 2));
+            adv.push({ zoom: z });
+            console.log('zoom set to', z, 'range', caps.zoom.min, '-', caps.zoom.max);
+          } else {
+            console.log('zoom not supported on this camera');
+          }
+          if (caps.focusMode && caps.focusMode.indexOf('continuous') !== -1) {
+            adv.push({ focusMode: 'continuous' });
+          }
+          if (adv.length) track.applyConstraints({ advanced: adv });
+        } catch(e) { console.log('camera tune failed:', e.message); }
+      }, 800);
     } catch(e) {
       document.getElementById('scannerStatus').textContent = 'Camera error: ' + e.message;
       document.getElementById('scannerStatus').className = 'scanner-status error';
