@@ -800,18 +800,33 @@ function openPackageOrder(orderNo) {
   document.getElementById('pkgOrderHeader').innerHTML = '<div class="pick-order-header"><p style="color:#94a3b8">Loading…</p></div>';
   document.getElementById('pkgItemsList').innerHTML = '';
 
-  apiFetch('getPackageOrder', { orderNo: String(orderNo) })
-    .then(function(data) {
+  Promise.all([
+    apiFetch('getPackageOrder', { orderNo: String(orderNo) }),
+    apiFetch('getBoxPhotos',    { orderNo: String(orderNo) })
+  ])
+    .then(function(results) {
+      var data   = results[0];
+      var photos = Array.isArray(results[1]) ? results[1] : [];
       if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
       _currentPkgData = data;
+
+      var photoLookup = {};
+      photos.forEach(function(p) { photoLookup[p.boxIdx + '|' + p.partCode] = p.photoData; });
 
       var byBox = {};
       Object.keys(data.boxes || {}).forEach(function(itemCode) {
         (data.boxes[itemCode] || []).forEach(function(box) {
           if (!byBox[box.boxIndex]) byBox[box.boxIndex] = [];
-          byBox[box.boxIndex].push({ itemCode:itemCode, qty:box.qtyInBox||0, weight:box.weight||0, photoUrl:null });
+          var sKey = String(orderNo) + '|' + box.boxIndex + '|' + itemCode;
+          byBox[box.boxIndex].push({
+            itemCode: itemCode,
+            qty:      box.qtyInBox || 0,
+            weight:   box.weight || 0,
+            photoUrl: _sessionPhotos[sKey] || photoLookup[box.boxIndex + '|' + itemCode] || null
+          });
         });
       });
+
       var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
 
       if (boxIdxs.length > 0) {
@@ -979,19 +994,37 @@ function savePackageDraft() {
   if (!payload) return;
   var btn = document.getElementById('savePkgBtn');
   btn.disabled = true; btn.textContent = 'Saving…';
+
   apiFetch('savePackageData', payload)
     .then(function(res) {
       btn.disabled = false; btn.textContent = 'Save for later';
-      if (res.success) {
-        showToast('Saved!', 'success');
-        setTimeout(exitPackageDetail, 900);
-      } else {
-        showToast('Error: ' + (res.error||''), 'error');
+      if (!res.success) { showToast('Error: ' + (res.error||''), 'error'); return; }
+
+      var h      = _currentPkgData.header;
+      var photos = collectPhotos();
+
+      photos.forEach(function(p) {
+        _sessionPhotos[h.orderNumber + '|' + p.boxIdx + '|' + p.partCode] =
+          'data:image/' + (p.ext === 'png' ? 'png' : 'jpeg') + ';base64,' + p.base64;
+      });
+
+      // Upload photos now so they survive leaving the page — no label PDF yet
+      if (photos.length) {
+        apiFetchPost({
+          action: 'saveOrderFiles',
+          orderNo: h.orderNumber,
+          location: h.location || 'MCM',
+          completionDate: h.promiseDate || new Date().toISOString().split('T')[0],
+          pdfBase64: null,
+          photos: photos
+        }).catch(function() {});
       }
+
+      showToast('Saved!', 'success');
+      setTimeout(exitPackageDetail, 700);
     })
     .catch(function() { btn.disabled = false; btn.textContent = 'Save for later'; showToast('Error saving', 'error'); });
 }
-//Restricts moving forward until order is complete
 function validateComplete() {
   var items = (_currentPkgData && _currentPkgData.items) || [];
   var totals = {}, problems = [];
