@@ -17,6 +17,7 @@ var _pkgBoxes        = [];
 var _sessionPicks    = [];
 var _pkgReturnTab    = null;
 var _entryMethod     = {};
+var _oorFilter = 'all';
 var _sessionPhotos   = {};   // "order|box|part" → base64, covers Drive thumbnail lag
 
 // ── Passcode gate ─────────────────────────────────────────
@@ -1328,6 +1329,10 @@ function loadOOR() {
       .catch(function() { showToast('Error loading OOR', 'error'); });
   }
 }
+function setOORFilter(f) {
+  _oorFilter = f;
+  renderOOR();
+}
 
 function renderOOR() {
   var q    = document.getElementById('oorSearch') ? document.getElementById('oorSearch').value.toLowerCase().trim() : '';
@@ -1355,11 +1360,53 @@ function renderOOR() {
     return;
   }
 
-  var filtered = _oorData.filter(function(o) {
+  // Search first, so the counts match what a filter would actually show
+  var searched = _oorData.filter(function(o) {
     return !q || String(o.orderNo).toLowerCase().indexOf(q) !== -1 || String(o.location||'').toLowerCase().indexOf(q) !== -1;
   });
-  if (!filtered.length) { list.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><p>No orders found.</p></div>'; return; }
-  list.innerHTML = filtered.map(function(o, idx) {
+
+  var bucket = function(s) {
+    if (s === 'Complete') return 'complete';
+    if (s === 'Packaging' || s === 'Picked') return 'progress';
+    return 'open';
+  };
+
+  var counts = { all: searched.length, complete: 0, progress: 0, open: 0 };
+  searched.forEach(function(o) { counts[bucket(o.wmsStatus)]++; });
+
+  var chip = function(key, label) {
+    return '<button class="oor-filter-btn' + (_oorFilter === key ? ' active' : '') + '" onclick="setOORFilter(\'' + key + '\')">' +
+      label + ' <span class="oor-filter-count">' + counts[key] + '</span></button>';
+  };
+
+  var filterBar = '<div class="oor-filter-bar">' +
+    chip('all', 'All') +
+    chip('complete', '✓ Complete') +
+    chip('progress', 'In progress') +
+    chip('open', 'Not started') +
+  '</div>';
+
+  var filtered = (_oorFilter === 'all')
+    ? searched
+    : searched.filter(function(o) { return bucket(o.wmsStatus) === _oorFilter; });
+
+  // Complete first, then in-progress, then untouched — order # within each group
+  var rank = function(s) {
+    if (s === 'Complete') return 0;
+    if (s === 'Packaging' || s === 'Picked') return 1;
+    return 2;
+  };
+  filtered.sort(function(a, b) {
+    var d = rank(a.wmsStatus) - rank(b.wmsStatus);
+    return d !== 0 ? d : Number(a.orderNo) - Number(b.orderNo);
+  });
+
+  if (!filtered.length) {
+    list.innerHTML = filterBar + '<div class="empty-state"><div class="empty-icon">📦</div><p>No orders in this view.</p></div>';
+    return;
+  }
+
+  list.innerHTML = filterBar + filtered.map(function(o, idx) {
     var locBadge = '<span class="badge badge-loc">' + (o.location||'—') + '</span>';
     var wmsBadge = isDoneStatus(o.wmsStatus) ? '<span class="badge badge-done">✓ Done</span>' :
                    (o.wmsStatus === 'Packaging' || o.wmsStatus === 'Picked') ? '<span class="badge badge-inprog">In WMS</span>' : '';
