@@ -866,6 +866,7 @@ function renderBoxSection(box, bIdx, items, isLast) {
       '<button class="add-part-to-box-btn" onclick="addPartToBox(' + bIdx + ')">+ Add part to box</button>' +
       (isLast ? '<button class="add-new-box-btn" onclick="addNewBox()">+ Add box</button>' : '') +
     '</div>' +
+    '<button class="print-box-btn" onclick="printBoxTag(' + bIdx + ')">🖨 Print tag for Box ' + (bIdx + 1) + '</button>' +
   '</div>';
 }
 
@@ -1098,7 +1099,7 @@ function renderPDFTag(doc, data) {
   doc.text(String(data.partCode || '—'), x, y); y += gap;
   doc.setFont(undefined, 'normal'); doc.setFontSize(11);
   doc.text('QTY: ' + String(data.qty || 0) + ' ' + String(data.uom || 'Feet'), x, y); y += gap;
-  doc.text('Pkg: ' + data.pkgIndex + ' of ' + data.pkgTotal, x, y);
+  doc.text('QTY ______ of ______', x, y);
 }
 
 function buildTagEntries(boxesFlat) {
@@ -1170,6 +1171,45 @@ function collectPhotos() {
     });
   });
   return photos;
+}
+
+// Print tags for one box mid-pack, straight from what's on screen
+function printBoxTag(bIdx) {
+  if (!_currentPkgData || !_pkgBoxes[bIdx]) return;
+
+  var h        = _currentPkgData.header;
+  var items    = _currentPkgData.items || [];
+  var itemInfo = {};
+  items.forEach(function(item) { itemInfo[item.itemCode] = item; });
+
+  var parts = _pkgBoxes[bIdx].parts.filter(function(p) { return p.itemCode; });
+  if (!parts.length) { showToast('Select a part for this box first', 'error'); return; }
+
+  var jsPDFLib = window.jspdf ? window.jspdf.jsPDF : (window.jsPDF || null);
+  if (!jsPDFLib) { showToast('PDF library not loaded', 'error'); return; }
+
+  var doc = null;
+  parts.forEach(function(part) {
+    var info = itemInfo[part.itemCode] || {};
+    if (!doc) { doc = new jsPDFLib({ orientation:'portrait', unit:'mm', format:[101.6, 152.4] }); }
+    else       { doc.addPage([101.6, 152.4], 'portrait'); }
+    renderPDFTag(doc, {
+      location:  h.location || '—',
+      po:        h.po || '—',
+      lotNumber: info.lotNumber || '—',
+      partCode:  part.itemCode,
+      qty:       part.qty || 0,
+      uom:       info.uom || 'Feet'
+    });
+  });
+
+  var win = window.open(doc.output('bloburl'), '_blank');
+  if (!win) {
+    doc.save('ArTek_' + h.orderNumber + '_Box' + (bIdx + 1) + '.pdf');
+    showToast('Popup blocked — downloaded instead', 'info');
+  } else {
+    showToast('Box ' + (bIdx + 1) + ' tag ready', 'success');
+  }
 }
 
 function reprintPDF(orderNo) {
