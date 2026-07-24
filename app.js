@@ -242,7 +242,7 @@ function _startScanner(label) {
       // Only try the 1D formats our part labels use — skips ~15 other decoders
       var hints = new Map();
       hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-
+      hints.set(ZXing.DecodeHintType.ALLOWED_LENGTHS, [4,5,6,7,8,9,10,11,12,13,14]);
       _codeReader = new ZXing.BrowserMultiFormatReader(hints, 120);
 
       _codeReader.decodeFromConstraints(
