@@ -245,8 +245,7 @@ function _startScanner(label) {
       // Only try the 1D formats our part labels use — skips ~15 other decoders
       var hints = new Map();
       hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-        ZXing.BarcodeFormat.CODE_128,
-        ZXing.BarcodeFormat.CODE_39
+        ZXing.BarcodeFormat.CODE_128
       ]);
 
       // Second arg = ms between decode attempts (default 500 — far too slow)
@@ -262,7 +261,9 @@ function _startScanner(label) {
         },
         document.getElementById('scannerVideo'),
         function(result, err) {
-          if (!scanIsValid(code)) {
+          if (result) {
+            var code = result.getText();
+            if (!scanIsValid(code)) {
               document.getElementById('scannerStatus').textContent = 'Hold steady — adjusting…';
               document.getElementById('scannerStatus').className = 'scanner-status';
               return;
