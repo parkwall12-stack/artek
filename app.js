@@ -201,7 +201,6 @@ function switchTab(tab) {
   if (tab === 'oor')     loadOOR();
   if (tab === 'package') loadPackageOrders();
 }
-
 // ── Scanner ───────────────────────────────────────────────
 function openScanner(targetInputId) {
   _scanTargetId = targetInputId;
