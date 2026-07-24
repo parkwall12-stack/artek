@@ -241,9 +241,9 @@ function _startScanner(label) {
     try {
       // Only try the 1D formats our part labels use — skips ~15 other decoders
       var hints = new Map();
-      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-        ZXing.BarcodeFormat.CODE_128
-      ]);
+      //hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      //  ZXing.BarcodeFormat.CODE_128
+      //]);
 
       // Second arg = ms between decode attempts (default 500 — far too slow)
       _codeReader = new ZXing.BrowserMultiFormatReader(hints, 120);
