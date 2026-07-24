@@ -241,19 +241,16 @@ function _startScanner(label) {
     try {
       // Only try the 1D formats our part labels use — skips ~15 other decoders
       var hints = new Map();
-      //hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-      //  ZXing.BarcodeFormat.CODE_128
-      //]);
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
 
-      // Second arg = ms between decode attempts (default 500 — far too slow)
       _codeReader = new ZXing.BrowserMultiFormatReader(hints, 120);
 
       _codeReader.decodeFromConstraints(
         {
           video: {
             facingMode: { ideal: 'environment' },
-            width:  { ideal: 1280 },
-            height: { ideal: 720 }
+            width:  { ideal: 1920 },
+            height: { ideal: 1080 }
           }
         },
         document.getElementById('scannerVideo'),
