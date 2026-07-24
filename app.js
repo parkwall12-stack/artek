@@ -260,11 +260,7 @@ function _startScanner(label) {
         function(result, err) {
           if (result) {
             var code = result.getText();
-            if (!scanIsValid(code)) {
-              document.getElementById('scannerStatus').textContent = 'Hold steady — adjusting…';
-              document.getElementById('scannerStatus').className = 'scanner-status';
-              return;
-            }
+            
             console.log('Barcode format:', String(result.getBarcodeFormat()));
             document.getElementById('scannerStatus').textContent = 'Got it: ' + code;
             document.getElementById('scannerStatus').className = 'scanner-status success';
