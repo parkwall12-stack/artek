@@ -437,7 +437,7 @@ function renderOrderDetail(data, photos) {
         '<div class="detail-item-code">' + item.itemCode + '</div>' +
         (item.description ? '<div class="detail-item-desc">' + item.description + '</div>' : '') +
         '<div class="detail-item-row"><span>Lot #</span><strong>' + (item.lotNumber || '—') + '</strong></div>' +
-        '<div class="detail-item-row"><span>Pieces pulled</span><strong>' + item.qtyPulled + ' ' + (item.uom||'') + '</strong></div>' +
+        '<div class="detail-item-row"><span>Pieces pulled</span><strong>' + item.qtyPulled + ' pcs</strong></div>' +
         boxesHtml +
       '</div>';
     });
