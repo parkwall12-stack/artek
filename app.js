@@ -727,7 +727,7 @@ function savePick() {
       var qtyPulled    = parseFloat((document.getElementById('pick-qty-' + idx)||{}).value || 0);
       var match        = codesMatch(expectedCode, scannedCode, item.description || '');
       var entry        = scannedCode ? (_entryMethod[idx] || 'Typed in') : '';
-      return { expectedCode:expectedCode, description:item.description||'', uom:item.uom||'',
+      return { expectedCode:expectedCode, scannedCode:scannedCode, description:item.description||'', uom:item.uom||'',
                lotNumber:lotNumber, qtyRequired:item.qtyOrdered, qtyPulled:qtyPulled, match:match, entry:entry };
     })
   };
