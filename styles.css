@@ -80,6 +80,7 @@ body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:
 .badge-ready    { background:#dbeafe; color:#1d4ed8; }
 .badge-inprog   { background:#fef3c7; color:#92400e; }
 .badge-done     { background:#d1fae5; color:#065f46; }
+.badge-draft    { background:#ede9fe; color:#5b21b6; }
 
 .empty-state { text-align:center; padding:60px 20px; color:var(--muted); }
 .empty-icon  { font-size:2.5rem; margin-bottom:12px; }
@@ -101,6 +102,7 @@ body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:
 .pick-item-card { background:var(--surface); border:1.5px solid var(--border); border-radius:var(--radius-lg); padding:14px 16px; margin-bottom:14px; transition:border-color .2s; }
 .pick-item-card.match    { border-color:var(--success); }
 .pick-item-card.no-match { border-color:var(--danger); }
+.pick-item-card.needs-fix { border-color:var(--danger); box-shadow:0 0 0 3px rgba(239,68,68,.18); }
 .pick-item-top  { margin-bottom:12px; }
 .pick-item-code { font-size:.88rem; font-weight:700; }
 .pick-item-desc { font-size:.78rem; color:var(--muted); margin-top:2px; }
@@ -233,9 +235,20 @@ body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:
 .photo-lightbox.active { display:flex; }
 .photo-lightbox img { max-width:100%; max-height:100%; border-radius:8px; box-shadow:0 8px 40px rgba(0,0,0,0.5); }
 /* ── Toast ───────────────────────────────────── */
-.toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(60px); background:var(--navy); color:#fff; padding:11px 22px; border-radius:var(--radius); font-size:.88rem; opacity:0; transition:all .3s; pointer-events:none; white-space:normal; max-width:min(90vw, 520px); text-align:center; line-height:1.4; z-index:999; }.toast.success{ border-left:3px solid var(--success); }
+.toast { position:fixed; bottom:calc(24px + var(--err-h, 0px)); left:50%; transform:translateX(-50%) translateY(60px); background:var(--navy); color:#fff; padding:11px 22px; border-radius:var(--radius); font-size:.88rem; opacity:0; transition:all .3s; pointer-events:none; white-space:normal; max-width:min(90vw, 520px); text-align:center; line-height:1.4; z-index:999; }
+.toast.success{ border-left:3px solid var(--success); }
 .toast.error  { border-left:3px solid var(--danger); }
 .toast.info   { border-left:3px solid var(--accent); }
+.toast.show   { opacity:1; transform:translateX(-50%) translateY(0); }
+
+/* Error panel — lists everything blocking a save */
+.error-panel { position:fixed; left:50%; bottom:16px; transform:translate(-50%, 140%); width:min(94vw, 560px); max-height:45vh; overflow-y:auto; background:#fef2f2; border:1px solid #fca5a5; border-left:5px solid #dc2626; border-radius:var(--radius-lg); padding:14px 44px 14px 16px; color:#7f1d1d; box-shadow:0 10px 30px rgba(127,29,29,.25); opacity:0; pointer-events:none; transition:transform .25s ease, opacity .25s ease; z-index:1000; }
+.error-panel.show { transform:translate(-50%, 0); opacity:1; pointer-events:auto; }
+.error-panel-title { font-size:.92rem; font-weight:700; color:#b91c1c; line-height:1.35; }
+.error-panel-list { margin:8px 0 0 18px; font-size:.86rem; line-height:1.45; }
+.error-panel-list li { margin-top:4px; }
+.error-panel-close { position:absolute; top:8px; right:8px; width:30px; height:30px; border:none; border-radius:var(--radius); background:transparent; color:#b91c1c; font-size:16px; cursor:pointer; }
+.error-panel-close:hover { background:#fee2e2; }
 
 @media(max-width:480px) {
   .page { padding:20px 12px 60px; }
