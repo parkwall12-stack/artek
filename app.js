@@ -17,8 +17,10 @@ var _pkgBoxes        = [];
 var _sessionPicks    = [];
 var _pkgReturnTab    = null;
 var _entryMethod     = {};
-var _oorFilter = 'all';
+var _oorFilter       = 'all';
 var _sessionPhotos   = {};   // "order|box|part" → base64, covers Drive thumbnail lag
+var _pickMode        = 'new';    // 'new' | 'resume' (draft) | 'edit' (already picked)
+var _pickReturn      = 'lookup'; // where Back/Save goes: 'lookup' or 'detail'
 
 // ── Passcode gate ─────────────────────────────────────────
 var PASSCODE = '3311';
@@ -178,22 +180,16 @@ function fmtDate(ymd) {
   return months[Number(p[1]) - 1] + ' ' + Number(p[2]) + ', ' + p[0];
 }
 
-// Stock bars are 120"; trailing number in the item code is the cut length
-// function pullEstimate(itemCode, qtyOrdered) {
-//  var STOCK = 120;
- // var parts = String(itemCode || '').trim().split('-');
- // var len   = parseFloat(parts[parts.length - 1]);
-  //var qty   = parseFloat(qtyOrdered);
- // if (!len || len <= 0 || !qty || qty <= 0) return null;
- // if (len > STOCK) return null;
- // var perBar = Math.floor(STOCK / len);
- // if (perBar < 1) return null;
- // return { bars: Math.ceil(qty / perBar), perBar: perBar, len: len };
-//}
-//
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+    return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+  });
+}
+
 // ── Tab routing ───────────────────────────────────────────
 
 function switchTab(tab) {
+  hideErrorPanel();
   document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   document.getElementById('tab-' + tab).classList.add('active');
@@ -217,18 +213,6 @@ function openPartScanner(idx, expectedCode) {
   _partScanCode = expectedCode;
   _scanTargetId = null;
   _startScanner('Scanning: Part ' + (idx + 1));
-}
-// Reject decodes that don't fit what we're scanning for — blocks Code 39
-// misreads like "CB-220VNLz0z,zz0" from ever being accepted
-function scanIsValid(code) {
-  var s = String(code || '').trim();
-  if (_partScanIdx !== null) {
-    // Part codes: FB-221VNL000-120, FP-9721K26VNL000-12
-    return /^[A-Za-z]{2,6}-[A-Za-z0-9]{3,24}-\d{1,4}$/.test(s);
-  }
-  if (_scanTargetId === 'orderNumber') return /^\d{4,10}$/.test(s);
-  if (_scanTargetId && _scanTargetId.indexOf('pick-lot-') === 0) return /^[A-Za-z0-9\-]{4,24}$/.test(s);
-  return true;
 }
 
 function _startScanner(label) {
@@ -258,8 +242,6 @@ function _startScanner(label) {
         function(result, err) {
           if (result) {
             var code = result.getText();
-            
-            console.log('Barcode format:', String(result.getBarcodeFormat()));
             document.getElementById('scannerStatus').textContent = 'Got it: ' + code;
             document.getElementById('scannerStatus').className = 'scanner-status success';
             if (_partScanIdx !== null) {
@@ -314,33 +296,47 @@ function closeScanner() {
 
 // ── Part verification ─────────────────────────────────────
 
-function verifyPartScan(idx, expectedCode, scannedCode, viaScanner) {
-  _entryMethod[idx] = viaScanner ? 'Scanned' : 'Typed in';
-
-  var _it     = ((_currentPickData && _currentPickData.items) || [])[idx];
-  var desc    = _it ? _it.description : '';
-  var problem = matchProblem(expectedCode, scannedCode, desc);
-  var isMatch = (problem === null);
+// silent = true paints the saved result on an edit screen without beeps,
+// toasts or touching how the code was originally entered
+function verifyPartScan(idx, expectedCode, scannedCode, viaScanner, silent) {
+  scannedCode = String(scannedCode || '').trim();
 
   var card     = document.getElementById('pick-card-' + idx);
   var input    = document.getElementById('pick-scan-' + idx);
   var status   = document.getElementById('pick-status-' + idx);
   var qtyInput = document.getElementById('pick-qty-' + idx);
 
-  if (input)  { input.value = scannedCode; input.className = isMatch ? 'input-match' : 'input-no-match'; }
-  if (card)   { card.classList.remove('match','no-match'); card.classList.add(isMatch ? 'match' : 'no-match'); }
+  if (card) card.classList.remove('match', 'no-match', 'needs-fix');
+
+  // Field cleared — back to a blank, unverified state
+  if (!scannedCode) {
+    delete _entryMethod[idx];
+    if (input)  { input.value = ''; input.className = ''; }
+    if (status) { status.textContent = ''; status.className = 'pick-status'; }
+    return;
+  }
+
+  if (!silent) _entryMethod[idx] = viaScanner ? 'Scanned' : 'Typed in';
+
+  var _it     = ((_currentPickData && _currentPickData.items) || [])[idx];
+  var desc    = _it ? _it.description : '';
+  var problem = matchProblem(expectedCode, scannedCode, desc);
+  var isMatch = (problem === null);
+
+  if (input) { input.value = scannedCode; input.className = isMatch ? 'input-match' : 'input-no-match'; }
+  if (card)  card.classList.add(isMatch ? 'match' : 'no-match');
   if (status) {
-    if (isMatch) {
-      status.textContent = '✓ Match — ' + extractMiddleCode(expectedCode) + ' verified';
-      status.className = 'pick-status match';
-      playGoodBeep(); showToast('✓ Part matched!', 'success');
-      if (qtyInput) setTimeout(function() { qtyInput.focus(); }, 100);
-    } else {
-      status.textContent = '✗ ' + problem;
-      status.className = 'pick-status no-match';
-      playBadBeep();
-      showToast('✗ ' + problem.split(' — ')[0] + '!', 'error');
-    }
+    status.textContent = isMatch ? '✓ Match — ' + extractMiddleCode(expectedCode) + ' verified' : '✗ ' + problem;
+    status.className   = 'pick-status ' + (isMatch ? 'match' : 'no-match');
+  }
+  if (silent) return;
+
+  if (isMatch) {
+    playGoodBeep(); showToast('✓ Part matched!', 'success');
+    if (qtyInput) setTimeout(function() { qtyInput.focus(); }, 100);
+  } else {
+    playBadBeep();
+    showToast('✗ ' + problem.split(' — ')[0] + '!', 'error');
   }
 }
 // ── Scan Orders list ──────────────────────────────────────
@@ -367,6 +363,7 @@ function renderOrders(orders) {
     var date  = o.timestamp || '—';
     var badge = o.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>' :
                 o.status === 'Packaging' ? '<span class="badge badge-inprog">Packaging</span>'  :
+                o.status === 'Picking'   ? '<span class="badge badge-draft">Draft</span>'       :
                 '<span class="badge badge-ready">Picked</span>';
     return '<div class="order-card" onclick="openOrderDetail(\'' + o.orderNumber + '\')">' +
       '<div class="order-icon">📋</div>' +
@@ -382,6 +379,7 @@ function renderOrders(orders) {
 // ── Order detail (read-only view) ─────────────────────────
 
 function openOrderDetail(orderNo) {
+  hideErrorPanel();
   _pkgReturnTab = document.querySelector('.tab-btn.active') ? document.querySelector('.tab-btn.active').id.replace('tab-','') : 'scan';
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   document.getElementById('page-order-detail').classList.add('active');
@@ -410,6 +408,7 @@ function renderOrderDetail(data, photos) {
   var statusBadge = h.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>' :
                     h.status === 'Archived'  ? '<span class="badge badge-complete">Archived</span>' :
                     h.status === 'Packaging' ? '<span class="badge badge-inprog">Packaging</span>'  :
+                    h.status === 'Picking'   ? '<span class="badge badge-draft">Draft</span>'       :
                     '<span class="badge badge-ready">Picked</span>';
 
   var bodyHtml = '';
@@ -452,6 +451,8 @@ function renderOrderDetail(data, photos) {
         '<button class="oor-action-btn oor-action-btn-view" onclick="openPackageOrder(\'' + h.orderNumber + '\')">✎ Edit boxes</button>' +
       '</div>' +
       '<button class="btn-exit" style="width:100%;margin-top:8px" onclick="openEditPick(\'' + h.orderNumber + '\')">✎ Edit pulled quantities</button>';
+  } else if (h.status === 'Picking') {
+    actionHtml = '<button class="btn-save" style="width:100%;margin-top:12px" onclick="openEditPick(\'' + h.orderNumber + '\')">Continue pick →</button>';
   } else {
     actionHtml = '<button class="btn-save" style="width:100%;margin-top:12px" onclick="openPackageOrder(\'' + h.orderNumber + '\')">Open in Packaging →</button>' +
       '<button class="btn-exit" style="width:100%;margin-top:8px" onclick="openEditPick(\'' + h.orderNumber + '\')">✎ Edit pulled quantities</button>';
@@ -468,77 +469,87 @@ function renderOrderDetail(data, photos) {
     '<div class="detail-box-section">' + bodyHtml + '</div>' +
     actionHtml;
 }
-var _editPickData = null;
+// ── Edit / continue a saved pick ──────────────────────────
+// Opens the same pick screen used for a new pick, pre-filled with what
+// was saved, so parts can be re-verified and the scanners still work.
 
 function openEditPick(orderNo) {
-  document.getElementById('detailContent').innerHTML = '<p style="color:#94a3b8;text-align:center;padding:40px">Loading…</p>';
+  var fromDetail = document.getElementById('page-order-detail').classList.contains('active');
+  if (fromDetail) {
+    document.getElementById('detailContent').innerHTML = '<p style="color:#94a3b8;text-align:center;padding:40px">Loading…</p>';
+  }
   apiFetch('getPackageOrder', { orderNo: String(orderNo) })
-    .then(function(data) {
-      if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
-      _editPickData = data;
-      var h = data.header;
-
-      var rows = (data.items || []).map(function(item, idx) {
-        return '<div class="detail-part-entry">' +
-          '<div class="detail-item-code">' + item.itemCode + '</div>' +
-          (item.description ? '<div class="detail-item-desc">' + item.description + '</div>' : '') +
-          '<div class="detail-item-row"><span>Required</span><strong>' + item.qtyRequired + ' ' + (item.uom||'') + '</strong></div>' +
-          '<div class="part-field-row" style="margin-top:8px">' +
-            '<div class="pkg-field"><label>Pieces pulled</label>' +
-              '<input type="number" id="edit-qty-' + idx + '" value="' + (item.qtyPulled || '') + '" placeholder="0" min="0"/>' +
-            '</div>' +
-            '<div class="pkg-field"><label>Lot #</label>' +
-              '<input type="text" id="edit-lot-' + idx + '" value="' + (item.lotNumber || '') + '" placeholder="Lot #"/>' +
-            '</div>' +
-          '</div>' +
-        '</div>';
-      }).join('');
-
-      document.getElementById('detailContent').innerHTML =
-        '<div class="pick-order-header">' +
-          '<div class="pick-order-num">Edit pull — Order #' + h.orderNumber + '</div>' +
-          '<div class="pick-order-meta"><span class="pick-order-po">PO: ' + (h.po||'—') + '</span>' +
-          ' &nbsp;·&nbsp; ' + (h.location||'—') + '</div>' +
-        '</div>' +
-        '<div class="detail-box-section">' + rows + '</div>' +
-        '<div class="footer-actions" style="margin-top:12px">' +
-          '<button class="btn-exit" onclick="openOrderDetail(\'' + h.orderNumber + '\')">Cancel</button>' +
-          '<button class="btn-save" id="editPickBtn" onclick="saveEditPick()">Save changes</button>' +
-        '</div>';
+    .then(function(d) {
+      if (d.error) {
+        showErrorPanel('Couldn\'t open order #' + orderNo, [d.error]);
+        if (fromDetail) openOrderDetail(orderNo);
+        return;
+      }
+      var h = d.header;
+      if (h.status === 'Archived') {
+        showErrorPanel('Order #' + orderNo + ' is archived', ['Shipped orders can\'t be edited.']);
+        if (fromDetail) openOrderDetail(orderNo);
+        return;
+      }
+      var data = {
+        header: { orderNo: h.orderNumber, po: h.po || '', location: h.location || '',
+                  promiseDate: h.promiseDate || '', status: h.status || '' },
+        items: (d.items || []).map(function(it) {
+          return {
+            itemCode:    it.itemCode,
+            description: it.description || '',
+            uom:         it.uom || '',
+            qtyOrdered:  it.qtyRequired,
+            saved: { scannedCode: it.scannedCode || '', entry: it.entry || '',
+                     lotNumber: it.lotNumber || '', qtyPulled: it.qtyPulled || 0 }
+          };
+        })
+      };
+      showPickPhase(data, h.status === 'Picking' ? 'resume' : 'edit', fromDetail ? 'detail' : 'lookup');
     })
-    .catch(function() { showToast('Error loading order', 'error'); });
+    .catch(function(err) {
+      showErrorPanel('Couldn\'t open order #' + orderNo, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
+      if (fromDetail) openOrderDetail(orderNo);
+    });
 }
 
 function saveEditPick() {
-  if (!_editPickData) return;
-  var h   = _editPickData.header;
-  var btn = document.getElementById('editPickBtn');
+  if (!_currentPickData) return;
+  var h    = _currentPickData.header;
+  var rows = collectPickRows();
 
-  var items = (_editPickData.items || []).map(function(item, idx) {
-    return {
-      itemCode:  item.itemCode,
-      qtyPulled: parseFloat((document.getElementById('edit-qty-' + idx)||{}).value || 0),
-      lotNumber: (document.getElementById('edit-lot-' + idx)||{}).value || ''
-    };
+  var problems = pickProblems(rows);
+  if (problems.length) {
+    showErrorPanel('Can\'t save changes to order #' + h.orderNo + ' — fix ' + (problems.length === 1 ? 'this' : 'these') + ' first:', problems);
+    scrollToFirstFix();
+    return;
+  }
+  hideErrorPanel();
+
+  var items = rows.map(function(r) {
+    return { itemCode: r.expectedCode, scannedCode: r.scannedCode, lotNumber: r.lotNumber,
+             qtyPulled: r.qtyPulled, match: r.match, entry: r.entry };
   });
 
-  btn.disabled = true; btn.textContent = 'Saving…';
-  apiFetch('updatePullQty', { orderNumber: h.orderNumber, items: items })
+  setPickButtonsBusy(true, 'savePickBtn');
+  apiFetch('updatePullQty', { orderNumber: String(h.orderNo), finish: true, items: items })
     .then(function(res) {
-      btn.disabled = false; btn.textContent = 'Save changes';
+      setPickButtonsBusy(false);
       if (res && res.success) {
-        showToast('Pull updated', 'success');
-        openOrderDetail(h.orderNumber);
+        showToast('Order #' + h.orderNo + ' pick updated', 'success');
+        leavePick();
       } else {
-        showToast('Error: ' + ((res && res.error) || 'save failed'), 'error');
+        showErrorPanel('Couldn\'t save order #' + h.orderNo, [(res && res.error) || 'Unknown error from server']);
       }
     })
-    .catch(function() {
-      btn.disabled = false; btn.textContent = 'Save changes';
-      showToast('Error saving', 'error');
+    .catch(function(err) {
+      setPickButtonsBusy(false);
+      showErrorPanel('Couldn\'t save order #' + h.orderNo, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
     });
 }
+
 function exitOrderDetail() {
+  hideErrorPanel();
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   var returnTab = _pkgReturnTab || 'scan';
   document.getElementById('tab-' + returnTab).classList.add('active');
@@ -552,6 +563,7 @@ function exitOrderDetail() {
 // ── Order lookup ──────────────────────────────────────────
 
 function showNewOrder() {
+  hideErrorPanel();
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   document.getElementById('page-new-order').classList.add('active');
   document.getElementById('phase-lookup').style.display = 'block';
@@ -575,7 +587,7 @@ function renderSessionPicks() {
         '<div class="session-pick-num">Order #' + p.orderNumber + '</div>' +
         '<div class="session-pick-meta">' + (p.location||'') + (p.po ? ' &nbsp;·&nbsp; PO: ' + p.po : '') + ' &nbsp;·&nbsp; ' + p.itemCount + ' item' + (p.itemCount !== 1 ? 's' : '') + '</div>' +
       '</div>' +
-      '<span class="badge badge-ok">Picked</span>' +
+      (p.draft ? '<span class="badge badge-draft">Draft</span>' : '<span class="badge badge-ok">Picked</span>') +
     '</div>';
   }).join('');
 }
@@ -606,6 +618,12 @@ function lookupOrder() {
 
       // Already in the system — open its record instead of a blank pick
       var ex = data.header && data.header.existingStatus;
+      if (ex === 'Picking') {
+        showToast('Order #' + num + ' has a saved draft — picking up where you left off', 'info');
+        document.getElementById('orderNumber').value = '';
+        openEditPick(num);
+        return;
+      }
       if (ex) {
         var msg = ex === 'Archived'  ? 'Order #' + num + ' already shipped — opening record' :
                   ex === 'Complete'  ? 'Order #' + num + ' is already complete — opening record' :
@@ -617,8 +635,7 @@ function lookupOrder() {
         return;
       }
 
-      _currentPickData = data;
-      showPickPhase(data);
+      showPickPhase(data, 'new', 'lookup');
     })
     .catch(function() {
       btn.disabled = false; btn.textContent = 'Look up order';
@@ -626,54 +643,85 @@ function lookupOrder() {
       errBox.style.display = 'block';
     });
 }
-function showPickPhase(data) {
+// mode: 'new' (blank), 'resume' (saved draft), 'edit' (already picked)
+// returnTo: 'lookup' (order # screen) or 'detail' (order details page)
+function showPickPhase(data, mode, returnTo) {
+  _pickMode        = mode || 'new';
+  _pickReturn      = returnTo || 'lookup';
+  _currentPickData = data;
+  _entryMethod     = {};
+  hideErrorPanel();
+
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+  document.getElementById('page-new-order').classList.add('active');
   document.getElementById('phase-lookup').style.display = 'none';
   document.getElementById('phase-pick').style.display   = 'block';
-  _entryMethod = {};
 
-  var h  = data.header;
-  var pd = fmtDate(h.promiseDate);
+  var h      = data.header;
+  var isEdit = _pickMode === 'edit';
+  var meta   = ['<span class="pick-order-po">PO: ' + escHtml(h.po || '—') + '</span>', escHtml(h.location || '—')];
+  if (h.isPrepaid !== undefined) meta.push(h.isPrepaid ? 'Prepaid' : 'Collect');
+  meta.push('Promise: ' + fmtDate(h.promiseDate));
+
+  var tag = _pickMode === 'resume' ? ' &nbsp;<span class="badge badge-draft">Draft</span>' :
+            isEdit ? ' &nbsp;<span class="badge badge-ready">' + escHtml(h.status || 'Picked') + '</span>' : '';
 
   document.getElementById('pickOrderHeader').innerHTML =
-    '<div class="pick-order-num">Order #' + h.orderNo + '</div>' +
-    '<div class="pick-order-meta">' +
-      '<span class="pick-order-po">PO: ' + (h.po||'—') + '</span>' +
-      ' &nbsp;·&nbsp; ' + (h.location||'—') +
-      ' &nbsp;·&nbsp; ' + (h.isPrepaid ? 'Prepaid' : 'Collect') +
-      ' &nbsp;·&nbsp; Promise: ' + pd +
-    '</div>';
+    '<div class="pick-order-num">' + (isEdit ? 'Edit pull — ' : '') + 'Order #' + escHtml(h.orderNo) + tag + '</div>' +
+    '<div class="pick-order-meta">' + meta.join(' &nbsp;·&nbsp; ') + '</div>';
 
   document.getElementById('pickItemsList').innerHTML = (data.items||[]).map(function(item, idx) {
     var code     = extractPartCode(item.itemCode);
     var safeCode = code.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    var s        = item.saved || {};
+    var qtyVal   = Number(s.qtyPulled) > 0 ? s.qtyPulled : '';
 
     return '<div class="pick-item-card" id="pick-card-' + idx + '">' +
       '<div class="pick-item-top">' +
-        '<div class="pick-item-code">' + code + '</div>' +
-        '<div class="pick-item-desc">' + (item.description||'') + '</div>' +
-        '<span class="pick-item-req">Required: ' + item.qtyOrdered + ' ' + item.uom + '</span>' +
+        '<div class="pick-item-code">' + escHtml(code) + '</div>' +
+        '<div class="pick-item-desc">' + escHtml(item.description || '') + '</div>' +
+        '<span class="pick-item-req">Required: ' + item.qtyOrdered + ' ' + escHtml(item.uom || '') + '</span>' +
       '</div>' +
 
       '<div class="pick-label">Part number</div>' +
       '<div class="pick-scan-row">' +
-        '<input type="text" id="pick-scan-' + idx + '" placeholder="Scan or type part #" autocomplete="off" onchange="verifyPartScan(' + idx + ',\'' + safeCode + '\',this.value,false)"/>' +
+        '<input type="text" id="pick-scan-' + idx + '" placeholder="Scan or type part #" autocomplete="off" value="' + escHtml(s.scannedCode || '') + '" onchange="verifyPartScan(' + idx + ',\'' + safeCode + '\',this.value,false)"/>' +
         '<button class="scan-btn" onclick="openPartScanner(' + idx + ',\'' + safeCode + '\')">&#9641;</button>' +
       '</div>' +
       '<div class="pick-status" id="pick-status-' + idx + '"></div>' +
 
       '<div class="pick-label">Lot number</div>' +
       '<div class="pick-scan-row">' +
-        '<input type="text" id="pick-lot-' + idx + '" placeholder="Scan or type lot #" autocomplete="off"/>' +
+        '<input type="text" id="pick-lot-' + idx + '" placeholder="Scan or type lot #" autocomplete="off" value="' + escHtml(s.lotNumber || '') + '"/>' +
         '<button class="scan-btn" onclick="openScanner(\'pick-lot-' + idx + '\')">&#9641;</button>' +
         '<button class="autofill-btn" id="autofill-btn-' + idx + '" onclick="autofillLot(' + idx + ')" title="Autofill lot number">⟳</button>' +
       '</div>' +
 
       '<div class="pick-qty-row">' +
         '<label>Pieces pulled</label>' +
-        '<input type="number" id="pick-qty-' + idx + '" placeholder="0" min="0"/>' +
+        '<input type="number" id="pick-qty-' + idx + '" placeholder="0" min="0" value="' + qtyVal + '"/>' +
       '</div>' +
     '</div>';
   }).join('');
+
+  // Re-check saved scans so cards show green/red right away — no beeps
+  (data.items || []).forEach(function(item, idx) {
+    var s = item.saved || {};
+    if (!s.scannedCode) return;
+    _entryMethod[idx] = s.entry || 'Typed in';
+    verifyPartScan(idx, extractPartCode(item.itemCode), s.scannedCode, false, true);
+  });
+
+  var footer = document.querySelector('#phase-pick .footer-actions');
+  if (footer) {
+    footer.innerHTML = isEdit
+      ? '<button class="btn-exit" onclick="leavePick()">Cancel</button>' +
+        '<button class="btn-save" id="savePickBtn" onclick="saveEditPick()">Save changes</button>'
+      : '<button class="btn-exit" onclick="leavePick()">Back</button>' +
+        '<button class="btn-exit" id="savePickDraftBtn" onclick="savePick(true)">Save draft</button>' +
+        '<button class="btn-save" id="savePickBtn" onclick="savePick(false)">Save pick</button>';
+  }
+  window.scrollTo(0, 0);
 }
 
 function autofillLot(idx) {
@@ -702,53 +750,140 @@ function autofillLot(idx) {
 }
 
 function backToLookup() {
+  hideErrorPanel();
+  _currentPickData = null;
   document.getElementById('phase-lookup').style.display = 'block';
   document.getElementById('phase-pick').style.display   = 'none';
   document.getElementById('lookupError').style.display  = 'none';
   document.getElementById('orderNumber').value = '';
+  renderSessionPicks();
   setTimeout(function() { document.getElementById('orderNumber').focus(); }, 100);
 }
 
-function savePick() {
+// Back / Cancel / after a save — returns to wherever the pick was opened from
+function leavePick() {
+  var orderNo = _currentPickData && _currentPickData.header ? String(_currentPickData.header.orderNo) : '';
+  if (_pickReturn === 'detail' && orderNo) { _currentPickData = null; openOrderDetail(orderNo); }
+  else backToLookup();
+}
+
+// Reads every pick card on screen
+function collectPickRows() {
+  var items = (_currentPickData && _currentPickData.items) || [];
+  return items.map(function(item, idx) {
+    var expectedCode = extractPartCode(item.itemCode);
+    var scannedCode  = ((document.getElementById('pick-scan-' + idx) || {}).value || '').trim();
+    var lotNumber    = ((document.getElementById('pick-lot-'  + idx) || {}).value || '').trim();
+    var qtyRaw       = ((document.getElementById('pick-qty-'  + idx) || {}).value || '').trim();
+    var problem      = scannedCode ? matchProblem(expectedCode, scannedCode, item.description || '') : null;
+    return {
+      idx: idx, expectedCode: expectedCode, scannedCode: scannedCode,
+      lotNumber: lotNumber, qtyRaw: qtyRaw, qtyPulled: parseFloat(qtyRaw) || 0,
+      description: item.description || '', uom: item.uom || '', qtyRequired: item.qtyOrdered,
+      problem: problem, match: !!scannedCode && problem === null,
+      entry: scannedCode ? (_entryMethod[idx] || 'Typed in') : ''
+    };
+  });
+}
+
+// Everything that stops a pick from being finished, one line per part.
+// Also outlines those cards in red.
+function pickProblems(rows) {
+  var out = [];
+  rows.forEach(function(r) {
+    var card = document.getElementById('pick-card-' + r.idx);
+    if (card) card.classList.remove('needs-fix');
+
+    var issues = [];
+    if (!r.scannedCode)       issues.push('part not scanned');
+    else if (r.problem)       issues.push(r.problem);
+    if (!r.lotNumber)         issues.push('lot # missing');
+    if (!(r.qtyPulled > 0))   issues.push('pieces pulled missing');
+
+    if (issues.length) {
+      out.push(r.expectedCode + ': ' + issues.join(', '));
+      if (card) card.classList.add('needs-fix');
+    }
+  });
+  return out;
+}
+
+function scrollToFirstFix() {
+  var first = document.querySelector('.pick-item-card.needs-fix');
+  if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function setPickButtonsBusy(busy, activeId) {
+  ['savePickBtn', 'savePickDraftBtn'].forEach(function(id) {
+    var b = document.getElementById(id);
+    if (!b) return;
+    if (!b.dataset.label) b.dataset.label = b.textContent;
+    b.disabled = busy;
+    b.textContent = (busy && id === activeId) ? 'Saving…' : b.dataset.label;
+  });
+}
+
+// isDraft = true  → "Save draft": needs at least one field, no other rules
+// isDraft = false → "Save pick":  every part scanned + matching, lot #, pieces pulled
+function savePick(isDraft) {
   if (!_currentPickData) return;
-  var h     = _currentPickData.header;
-  var items = _currentPickData.items || [];
-  var btn   = document.getElementById('savePickBtn');
+  isDraft  = isDraft === true;
+  var h    = _currentPickData.header;
+  var rows = collectPickRows();
+
+  if (isDraft) {
+    rows.forEach(function(r) {
+      var card = document.getElementById('pick-card-' + r.idx);
+      if (card) card.classList.remove('needs-fix');
+    });
+    var anything = rows.some(function(r) { return r.scannedCode || r.lotNumber || r.qtyRaw; });
+    if (!anything) {
+      showErrorPanel('Can\'t save a blank draft', ['Scan a part, enter a lot # or enter pieces pulled first.']);
+      return;
+    }
+  } else {
+    var problems = pickProblems(rows);
+    if (problems.length) {
+      showErrorPanel('Can\'t save pick for order #' + h.orderNo + ' — fix ' + (problems.length === 1 ? 'this' : 'these') + ' first:', problems);
+      scrollToFirstFix();
+      return;
+    }
+  }
+  hideErrorPanel();
 
   var payload = {
     orderNumber: String(h.orderNo),
     po:          h.po || '',
     location:    h.location || '',
     promiseDate: h.promiseDate || '',
-    items: items.map(function(item, idx) {
-      var expectedCode = extractPartCode(item.itemCode);
-      var scannedCode  = (document.getElementById('pick-scan-' + idx)||{}).value || '';
-      var lotNumber    = (document.getElementById('pick-lot-'  + idx)||{}).value || '';
-      var qtyPulled    = parseFloat((document.getElementById('pick-qty-' + idx)||{}).value || 0);
-      var match        = codesMatch(expectedCode, scannedCode, item.description || '');
-      var entry        = scannedCode ? (_entryMethod[idx] || 'Typed in') : '';
-      return { expectedCode:expectedCode, scannedCode:scannedCode, description:item.description||'', uom:item.uom||'',
-               lotNumber:lotNumber, qtyRequired:item.qtyOrdered, qtyPulled:qtyPulled, match:match, entry:entry };
+    status:      isDraft ? 'Picking' : 'Picked',
+    items: rows.map(function(r) {
+      return { expectedCode: r.expectedCode, scannedCode: r.scannedCode, description: r.description,
+               uom: r.uom, lotNumber: r.lotNumber, qtyRequired: r.qtyRequired,
+               qtyPulled: r.qtyPulled, match: r.match, entry: r.entry };
     })
   };
 
-  btn.disabled = true; btn.textContent = 'Saving…';
+  setPickButtonsBusy(true, isDraft ? 'savePickDraftBtn' : 'savePickBtn');
   apiFetch('saveScanOrder', payload)
     .then(function(res) {
-      btn.disabled = false; btn.textContent = 'Save pick';
-      if (res && res.success) {
-        _sessionPicks.unshift({ orderNumber:String(h.orderNo), po:h.po||'', location:h.location||'', itemCount:items.length });
-        showToast('Order #' + h.orderNo + ' picked — ready to package', 'success');
-        document.getElementById('phase-pick').style.display   = 'none';
-        document.getElementById('phase-lookup').style.display = 'block';
-        document.getElementById('orderNumber').value = '';
-        document.getElementById('lookupError').style.display  = 'none';
-        _currentPickData = null;
-        renderSessionPicks();
-        setTimeout(function() { document.getElementById('orderNumber').focus(); }, 100);
-      } else { showToast('Error: ' + ((res && res.error) || 'Unknown error'), 'error'); }
+      setPickButtonsBusy(false);
+      if (!(res && res.success)) {
+        showErrorPanel('Couldn\'t save order #' + h.orderNo, [(res && res.error) || 'Unknown error from server']);
+        return;
+      }
+      var no = String(h.orderNo);
+      _sessionPicks = _sessionPicks.filter(function(p) { return p.orderNumber !== no; });
+      _sessionPicks.unshift({ orderNumber: no, po: h.po || '', location: h.location || '',
+                              itemCount: rows.length, draft: isDraft });
+      showToast(isDraft ? 'Draft saved for order #' + no
+                        : 'Order #' + no + ' picked — ready to package', 'success');
+      leavePick();
     })
-    .catch(function(err) { btn.disabled = false; btn.textContent = 'Save pick'; showToast('Error: ' + (err.message||'check connection'), 'error'); });
+    .catch(function(err) {
+      setPickButtonsBusy(false);
+      showErrorPanel('Couldn\'t save order #' + h.orderNo, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
+    });
 }
 
 function exitForm() {
@@ -794,6 +929,7 @@ function renderPackageList(orders) {
 // ── Package order detail (edit mode) ──────────────────────
 
 function openPackageOrder(orderNo) {
+  hideErrorPanel();
   _pkgReturnTab = document.querySelector('.tab-btn.active') ? document.querySelector('.tab-btn.active').id.replace('tab-','') : 'package';
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   document.getElementById('page-package-detail').classList.add('active');
@@ -999,7 +1135,11 @@ function savePackageDraft() {
   apiFetch('savePackageData', payload)
     .then(function(res) {
       btn.disabled = false; btn.textContent = 'Save for later';
-      if (!res.success) { showToast('Error: ' + (res.error||''), 'error'); return; }
+      if (!res.success) {
+        showErrorPanel('Couldn\'t save order #' + _currentPkgData.header.orderNumber, [res.error || 'Unknown error from server']);
+        return;
+      }
+      hideErrorPanel();
 
       var h      = _currentPkgData.header;
       var photos = collectPhotos();
@@ -1024,62 +1164,76 @@ function savePackageDraft() {
       showToast('Saved!', 'success');
       setTimeout(exitPackageDetail, 700);
     })
-    .catch(function() { btn.disabled = false; btn.textContent = 'Save for later'; showToast('Error saving', 'error'); });
+    .catch(function(err) {
+      btn.disabled = false; btn.textContent = 'Save for later';
+      showErrorPanel('Couldn\'t save order #' + _currentPkgData.header.orderNumber, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
+    });
 }
-function validateComplete() {
-  var items = (_currentPkgData && _currentPkgData.items) || [];
-  var totals = {}, problems = [];
+// Everything that stops an order from being completed, in plain words
+function packagingProblems() {
+  var items  = (_currentPkgData && _currentPkgData.items) || [];
+  var totals = {}, out = [];
 
   _pkgBoxes.forEach(function(box, bIdx) {
     box.parts.forEach(function(part) {
-      if (!part.itemCode) { problems.push('Box ' + (bIdx+1) + ' has an empty part slot'); return; }
-      totals[part.itemCode] = (totals[part.itemCode] || 0) + (parseFloat(part.qty) || 0);
+      if (!part.itemCode) {
+        out.push('Box ' + (bIdx+1) + ': empty part slot — select a part or remove it');
+        return;
+      }
+      var q = parseFloat(part.qty) || 0;
+      if (!(q > 0)) out.push('Box ' + (bIdx+1) + ': ' + part.itemCode + ' has no quantity entered');
+      totals[part.itemCode] = (totals[part.itemCode] || 0) + q;
     });
   });
 
-  items.forEach(function(item) {
-    if (!(totals[item.itemCode] > 0)) problems.push(item.itemCode + ' is not in any box');
-  });
-
-  return problems;
-}
-
-function shortfalls() {
-  var items = (_currentPkgData && _currentPkgData.items) || [];
-  var totals = {}, out = [];
-  _pkgBoxes.forEach(function(box) {
-    box.parts.forEach(function(part) {
-      if (part.itemCode) totals[part.itemCode] = (totals[part.itemCode] || 0) + (parseFloat(part.qty) || 0);
-    });
-  });
   items.forEach(function(item) {
     var boxed = totals[item.itemCode] || 0;
     var req   = Number(item.qtyRequired) || 0;
-    if (req > 0 && boxed < req) out.push(item.itemCode + ' — ' + boxed + ' of ' + req + ' ' + (item.uom||''));
+    if (!(boxed > 0))              out.push(item.itemCode + ': not in any box yet');
+    else if (req > 0 && boxed < req) out.push(item.itemCode + ': short — ' + boxed + ' of ' + req + ' ' + (item.uom||'') + ' boxed');
   });
+
   return out;
 }
 
 function completeOrder() {
   var payload = collectPackagePayload(true);
   if (!payload) return;
-  var problems = validateComplete();
-  if (problems.length) { showToast(problems[0], 'error'); return; }
+  var orderNo = _currentPkgData.header.orderNumber;
 
-  var short = shortfalls();
-  if (short.length) { showToast('Short: ' + short.join('   ·   '), 'error'); return; }
-  
+  var problems = packagingProblems();
+  if (problems.length) {
+    showErrorPanel('Can\'t complete order #' + orderNo + ' — fix ' + (problems.length === 1 ? 'this' : 'these') + ' first:', problems);
+    return;
+  }
+  hideErrorPanel();
+
   var btn = document.getElementById('completePkgBtn');
   btn.disabled = true; btn.textContent = 'Completing…';
 
   apiFetch('savePackageData', payload)
     .then(function(res) {
       btn.disabled = false; btn.textContent = '✓ Complete order';
-      if (!res.success) { showToast('Error: ' + (res.error||''), 'error'); return; }
+      if (!res.success) {
+        showErrorPanel('Couldn\'t complete order #' + orderNo, [res.error || 'Unknown error from server']);
+        return;
+      }
 
-      var h         = _currentPkgData.header;
-      var pdfBase64 = generatePDFBase64();
-      var photos    = collectPhotos();
+      var h = _currentPkgData.header;
+      var pdfBase64 = null, photos = [];
+      try {
+        pdfBase64 = generatePDFBase64();
+        photos    = collectPhotos();
+      } catch (e) {
+        // The order itself is saved — only the tag PDF / photos failed.
+        // Stay on this screen so the message can be read.
+        showToast('Order complete!', 'success');
+        showErrorPanel('Order #' + orderNo + ' is complete, but the tags/photos didn\'t upload', [
+          (e && e.message) || String(e),
+          'Tap Back, open the order and use 🖨 Print tags to reprint.'
+        ]);
+        return;
+      }
 
       photos.forEach(function(p) {
         _sessionPhotos[h.orderNumber + '|' + p.boxIdx + '|' + p.partCode] =
@@ -1087,26 +1241,32 @@ function completeOrder() {
       });
 
       // Background — screen closes without waiting on Drive
-      apiFetchPost({
-        action: 'saveOrderFiles',
-        orderNo: h.orderNumber,
-        location: h.location || 'MCM',
-        completionDate: h.promiseDate || new Date().toISOString().split('T')[0],
-        pdfBase64: pdfBase64,
-        photos: photos
-      }).then(function(fr) {
-        if (fr && fr.success) showToast('Files saved to Drive', 'success');
-      }).catch(function() {});
+      if (pdfBase64 || photos.length) {
+        apiFetchPost({
+          action: 'saveOrderFiles',
+          orderNo: h.orderNumber,
+          location: h.location || 'MCM',
+          completionDate: h.promiseDate || new Date().toISOString().split('T')[0],
+          pdfBase64: pdfBase64,
+          photos: photos
+        }).then(function(fr) {
+          if (fr && fr.success) showToast('Files saved to Drive', 'success');
+          else showErrorPanel('Order #' + orderNo + ' completed, but Drive upload failed', [(fr && fr.error) || 'Unknown error from Drive']);
+        }).catch(function(err) {
+          showErrorPanel('Order #' + orderNo + ' completed, but Drive upload failed', ['Connection problem — ' + ((err && err.message) || 'check signal')]);
+        });
+      }
 
       showToast('Order complete!', 'success');
       setTimeout(exitPackageDetail, 700);
     })
-    .catch(function() {
+    .catch(function(err) {
       btn.disabled = false; btn.textContent = '✓ Complete order';
-      showToast('Error completing order', 'error');
+      showErrorPanel('Couldn\'t complete order #' + orderNo, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
     });
 }
 function exitPackageDetail() {
+  hideErrorPanel();
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   var returnTab = _pkgReturnTab || 'package';
   document.getElementById('tab-' + returnTab).classList.add('active');
@@ -1367,7 +1527,7 @@ function renderOOR() {
 
   var bucket = function(s) {
     if (s === 'Complete') return 'complete';
-    if (s === 'Packaging' || s === 'Picked') return 'progress';
+    if (s === 'Packaging' || s === 'Picked' || s === 'Picking') return 'progress';
     return 'open';
   };
 
@@ -1393,7 +1553,7 @@ function renderOOR() {
   // Complete first, then in-progress, then untouched — order # within each group
   var rank = function(s) {
     if (s === 'Complete') return 0;
-    if (s === 'Packaging' || s === 'Picked') return 1;
+    if (s === 'Packaging' || s === 'Picked' || s === 'Picking') return 1;
     return 2;
   };
   filtered.sort(function(a, b) {
@@ -1409,6 +1569,7 @@ function renderOOR() {
   list.innerHTML = filterBar + filtered.map(function(o, idx) {
     var locBadge = '<span class="badge badge-loc">' + (o.location||'—') + '</span>';
     var wmsBadge = isDoneStatus(o.wmsStatus) ? '<span class="badge badge-done">✓ Done</span>' :
+                   o.wmsStatus === 'Picking' ? '<span class="badge badge-draft">Draft</span>' :
                    (o.wmsStatus === 'Packaging' || o.wmsStatus === 'Picked') ? '<span class="badge badge-inprog">In WMS</span>' : '';
     return '<div class="oor-card" id="oor-' + idx + '">' +
       '<div class="oor-card-header" onclick="toggleOOR(' + idx + ',\'' + o.orderNo + '\',\'' + (o.wmsStatus||'') + '\')">' +
@@ -1506,6 +1667,7 @@ function renderOORItemsWithBoxes(container, data) {
 }
 
 function viewOrderFromOOR(orderNo) {
+  hideErrorPanel();
   _pkgReturnTab = 'oor';
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   document.getElementById('page-order-detail').classList.add('active');
@@ -1529,6 +1691,41 @@ function showToast(msg, type) {
   t.className = 'toast ' + (type || 'success');
   setTimeout(function() { t.classList.add('show'); }, 10);
   setTimeout(function() { t.classList.remove('show'); }, 3200);
+}
+
+// ── Error panel ───────────────────────────────────────────
+// Red panel pinned to the bottom listing everything that blocked a save.
+// Stays up until ✕, a successful save, or leaving the screen.
+
+function showErrorPanel(title, problems) {
+  var el = document.getElementById('errorPanel');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'errorPanel';
+    el.className = 'error-panel';
+    el.setAttribute('role', 'alert');
+    document.body.appendChild(el);
+  }
+  problems = (problems || []).filter(Boolean);
+  el.innerHTML =
+    '<button class="error-panel-close" onclick="hideErrorPanel()" aria-label="Dismiss">✕</button>' +
+    '<div class="error-panel-title">⚠ ' + escHtml(title) + '</div>' +
+    (problems.length
+      ? '<ul class="error-panel-list">' + problems.map(function(p) { return '<li>' + escHtml(p) + '</li>'; }).join('') + '</ul>'
+      : '');
+  el.classList.add('show');
+  // Room at the bottom so the panel never hides the last buttons,
+  // and toasts pop up above it instead of on top of it
+  document.body.style.paddingBottom = (el.offsetHeight + 32) + 'px';
+  document.body.style.setProperty('--err-h', (el.offsetHeight + 12) + 'px');
+  playBadBeep();
+}
+
+function hideErrorPanel() {
+  var el = document.getElementById('errorPanel');
+  if (el) el.classList.remove('show');
+  document.body.style.paddingBottom = '';
+  document.body.style.removeProperty('--err-h');
 }
 
 // ── Init ──────────────────────────────────────────────────
