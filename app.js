@@ -21,6 +21,8 @@ var _oorFilter       = 'all';
 var _sessionPhotos   = {};   // "order|box|part" → base64, covers Drive thumbnail lag
 var _pickMode        = 'new';    // 'new' | 'resume' (draft) | 'edit' (already picked)
 var _pickReturn      = 'lookup'; // where Back/Save goes: 'lookup' or 'detail'
+var _partsData       = null;     // { needed, catalog, openOrderCount, blockedOrderCount }
+var _partSuggestions = [];
 
 // ── Passcode gate ─────────────────────────────────────────
 var PASSCODE = '3311';
@@ -197,6 +199,7 @@ function switchTab(tab) {
   if (tab === 'scan')    loadOrders();
   if (tab === 'oor')     loadOOR();
   if (tab === 'package') loadPackageOrders();
+  if (tab === 'parts')   loadParts();
 }
 // ── Scanner ───────────────────────────────────────────────
 function openScanner(targetInputId) {
@@ -1554,8 +1557,13 @@ function renderOOR() {
     return 'open';
   };
 
-  var counts = { all: searched.length, complete: 0, progress: 0, open: 0 };
-  searched.forEach(function(o) { counts[bucket(o.wmsStatus)]++; });
+  var isWaiting = function(o) { return !!(o.missing && o.missing.length); };
+
+  var counts = { all: searched.length, complete: 0, progress: 0, open: 0, waiting: 0 };
+  searched.forEach(function(o) {
+    counts[bucket(o.wmsStatus)]++;
+    if (isWaiting(o)) counts.waiting++;
+  });
 
   var chip = function(key, label) {
     return '<button class="oor-filter-btn' + (_oorFilter === key ? ' active' : '') + '" onclick="setOORFilter(\'' + key + '\')">' +
@@ -1564,14 +1572,15 @@ function renderOOR() {
 
   var filterBar = '<div class="oor-filter-bar">' +
     chip('all', 'All') +
+    (counts.waiting || _oorFilter === 'waiting' ? chip('waiting', '⚠ Waiting on parts') : '') +
     chip('complete', '✓ Complete') +
     chip('progress', 'In progress') +
     chip('open', 'Not started') +
   '</div>';
 
-  var filtered = (_oorFilter === 'all')
-    ? searched
-    : searched.filter(function(o) { return bucket(o.wmsStatus) === _oorFilter; });
+  var filtered = (_oorFilter === 'all')     ? searched :
+                 (_oorFilter === 'waiting') ? searched.filter(isWaiting) :
+                 searched.filter(function(o) { return bucket(o.wmsStatus) === _oorFilter; });
 
   // Complete first, then in-progress, then untouched — order # within each group
   var rank = function(s) {
@@ -1590,7 +1599,8 @@ function renderOOR() {
   }
 
   list.innerHTML = filterBar + filtered.map(function(o, idx) {
-    var locBadge = '<span class="badge badge-loc">' + (o.location||'—') + '</span>';
+    var locBadge = '<span class="badge badge-loc">' + (o.location||'—') + '</span>' +
+                   (isWaiting(o) ? '<span class="badge badge-missing">Missing part</span>' : '');
     var wmsBadge = isDoneStatus(o.wmsStatus) ? '<span class="badge badge-done">✓ Done</span>' :
                    o.wmsStatus === 'Picking' ? '<span class="badge badge-draft">Draft</span>' :
                    (o.wmsStatus === 'Packaging' || o.wmsStatus === 'Picked') ? '<span class="badge badge-inprog">In WMS</span>' : '';
@@ -1645,9 +1655,13 @@ function toggleOOR(idx, orderNo, wmsStatus) {
 
 function renderOORItems(container, items, orderNo) {
   if (!items || !items.length) { container.innerHTML = '<div class="oor-item-loading">No items found.</div>'; return; }
+  var hdr     = _oorData.filter(function(o) { return String(o.orderNo) === String(orderNo); })[0];
+  var missing = (hdr && hdr.missing) || [];
   container.innerHTML = items.map(function(item) {
-    return '<div class="oor-item">' +
-      '<div style="flex:1;min-width:0"><div class="oor-item-code">' + (item.itemCode||'—') + '</div><div class="oor-item-desc">' + (item.description||'') + '</div></div>' +
+    var short = missing.filter(function(p) { return sameMaterial(p, item.itemCode); })[0];
+    return '<div class="oor-item' + (short ? ' oor-item-missing' : '') + '">' +
+      '<div style="flex:1;min-width:0"><div class="oor-item-code">' + (item.itemCode||'—') + '</div><div class="oor-item-desc">' + (item.description||'') + '</div>' +
+        (short ? '<div class="oor-item-missing-note">⚠ Out of ' + escHtml(short) + '</div>' : '') + '</div>' +
       '<div class="oor-item-qty">' + (item.qtyOrdered||0) + ' ' + (item.uom||'') + '</div>' +
     '</div>';
   }).join('') +
@@ -1708,13 +1722,228 @@ function viewOrderFromOOR(orderNo) {
 
 // ── Toast ─────────────────────────────────────────────────
 
+var _toastTimer = null;
+
 function showToast(msg, type) {
   var t = document.getElementById('toast');
+  // Cancel the previous toast's hide timer so it can't cut this one short
+  clearTimeout(_toastTimer);
   t.textContent = msg;
   t.className = 'toast ' + (type || 'success');
   setTimeout(function() { t.classList.add('show'); }, 10);
-  setTimeout(function() { t.classList.remove('show'); }, 3200);
+  _toastTimer = setTimeout(function() { t.classList.remove('show'); }, 3200);
 }
+
+// ── Missing parts tab ─────────────────────────────────────
+// The list lives in the Parts_Needed tab so everyone sees the same one.
+// Each part is checked against open (not yet picked) OOR orders.
+
+// Same material, ignoring the prefix (FB vs FBMCM) and cut length (-120 vs -60)
+function sameMaterial(a, b) {
+  var ma = extractMiddleCode(extractPartCode(a)), mb = extractMiddleCode(extractPartCode(b));
+  if (!ma || !mb) return false;
+  if (ma === mb) return true;
+  var fp = /^FP/i.test(String(a).trim()) || /^FP/i.test(String(b).trim());
+  return fp && ma.length >= 4 && mb.length >= 4 && (ma.indexOf(mb) === 0 || mb.indexOf(ma) === 0);
+}
+
+var PART_RE = /^[A-Z][A-Z0-9]{1,7}-[A-Z0-9][A-Z0-9.\/]*(-[A-Z0-9.\/]+)*$/;
+
+function loadParts() {
+  hideErrorPanel();
+  var list = document.getElementById('partsList');
+  if (!_partsData) list.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
+  apiFetch('getPartsOverview')
+    .then(function(d) {
+      if (!d || d.error) {
+        list.innerHTML = '';
+        showErrorPanel('Couldn\'t load the parts list', [(d && d.error) || 'Unknown error from server']);
+        return;
+      }
+      _partsData = d;
+      renderParts();
+      partSuggest();
+    })
+    .catch(function(err) {
+      list.innerHTML = '';
+      showErrorPanel('Couldn\'t load the parts list', ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
+    });
+}
+
+function isOnNeededList(code) {
+  return ((_partsData && _partsData.needed) || []).some(function(n) { return n.part === code; });
+}
+
+// Type-ahead: "205" → FB-205VNL000-120. Codes whose material starts with
+// what you typed come first, then codes that contain it anywhere.
+function partSuggest() {
+  var input = document.getElementById('partInput');
+  var box   = document.getElementById('partSuggest');
+  if (!input || !box) return;
+  var q = input.value.trim().toUpperCase();
+  _partSuggestions = [];
+  if (q.length < 2 || !_partsData) { box.innerHTML = ''; return; }
+
+  var scored = [];
+  (_partsData.catalog || []).forEach(function(code) {
+    if (code === q) return;
+    var at = code.indexOf(q);
+    if (at === -1) return;
+    var mid = extractMiddleCode(code);
+    // "205" ranks FB-205VNL000-120 (whole number) above FB-2051VNL000-120
+    var score = mid.indexOf(q) === 0 ? (/\d/.test(mid.charAt(q.length)) ? 1 : 0) : at === 0 ? 2 : 3;
+    scored.push([score, code]);
+  });
+  scored.sort(function(a, b) { return a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0); });
+  _partSuggestions = scored.slice(0, 8).map(function(s) { return s[1]; });
+
+  if (!_partSuggestions.length) {
+    box.innerHTML = (_partsData.catalog || []).indexOf(q) !== -1 ? '' :
+      '<div class="part-suggest-empty">No matching part numbers — you can still add it as typed</div>';
+    return;
+  }
+  box.innerHTML = _partSuggestions.map(function(code, i) {
+    var at  = code.indexOf(q);
+    var hit = escHtml(code.slice(0, at)) + '<mark>' + escHtml(code.slice(at, at + q.length)) + '</mark>' + escHtml(code.slice(at + q.length));
+    return '<button type="button" class="part-suggest-item" onclick="pickSuggestion(' + i + ')"><span class="part-suggest-code">' + hit + '</span>' +
+      (isOnNeededList(code) ? '<span class="part-suggest-tag">on list</span>' : '') + '</button>';
+  }).join('');
+}
+
+function pickSuggestion(i) {
+  var code = _partSuggestions[i];
+  if (!code) return;
+  document.getElementById('partInput').value = code;
+  document.getElementById('partSuggest').innerHTML = '';
+  _partSuggestions = [];
+  var note = document.getElementById('partNote');
+  if (note) note.focus();
+}
+
+// Enter picks the top suggestion; Enter again adds it
+function partInputKey(e) {
+  if (e.key === 'Escape') { document.getElementById('partSuggest').innerHTML = ''; _partSuggestions = []; return; }
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  if (_partSuggestions.length) pickSuggestion(0);
+  else addNeededPart();
+}
+
+function addNeededPart() {
+  var input = document.getElementById('partInput');
+  var note  = document.getElementById('partNote');
+  var part  = extractPartCode(input.value).toUpperCase();
+
+  if (!part) { showErrorPanel('Can\'t add a blank part', ['Type or scan a part number first.']); return; }
+  if (part.length > 40 || !PART_RE.test(part)) {
+    showErrorPanel('"' + part.slice(0, 40) + '" doesn\'t look like a part number', ['Part numbers look like FB-205VNL000-120.']);
+    return;
+  }
+  if (isOnNeededList(part)) { showErrorPanel(part + ' is already on the list', []); return; }
+
+  var known = ((_partsData && _partsData.catalog) || []).indexOf(part) !== -1;
+  if (!known && !confirm(part + ' isn\'t in the part list we know about. Add it anyway?')) return;
+
+  hideErrorPanel();
+  var btn = document.getElementById('addPartBtn');
+  btn.disabled = true; btn.textContent = 'Adding…';
+  apiFetch('addNeededPart', { part: part, note: (note.value || '').trim() })
+    .then(function(res) {
+      btn.disabled = false; btn.textContent = '+ Add to list';
+      if (!(res && res.success)) {
+        showErrorPanel('Couldn\'t add ' + part, [(res && res.error) || 'Unknown error from server']);
+        return;
+      }
+      input.value = ''; note.value = '';
+      document.getElementById('partSuggest').innerHTML = '';
+      _partSuggestions = [];
+      showToast(part + ' added to missing parts', 'success');
+      loadParts();
+    })
+    .catch(function(err) {
+      btn.disabled = false; btn.textContent = '+ Add to list';
+      showErrorPanel('Couldn\'t add ' + part, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
+    });
+}
+
+function removeNeededPart(idx) {
+  var n = ((_partsData && _partsData.needed) || [])[idx];
+  if (!n) return;
+  if (!confirm('Take ' + n.part + ' off the missing parts list?')) return;
+  apiFetch('removeNeededPart', { part: n.part })
+    .then(function(res) {
+      if (!(res && res.success)) {
+        showErrorPanel('Couldn\'t remove ' + n.part, [(res && res.error) || 'Unknown error from server']);
+        return;
+      }
+      showToast(n.part + ' removed', 'success');
+      loadParts();
+    })
+    .catch(function(err) {
+      showErrorPanel('Couldn\'t remove ' + n.part, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
+    });
+}
+
+function showWaitingInOOR() {
+  _oorFilter = 'waiting';
+  if (_oorShowArchived) toggleArchiveView();
+  switchTab('oor');
+}
+
+function renderParts() {
+  var d       = _partsData || {};
+  var needed  = (d.needed || []).map(function(n, i) { n._i = i; return n; });
+  var summary = document.getElementById('partsSummary');
+  var list    = document.getElementById('partsList');
+
+  var open    = d.openOrderCount || 0;
+  var blocked = d.blockedOrderCount || 0;
+  summary.innerHTML =
+    '<div class="parts-summary">' +
+      '<div class="parts-stat"><div class="parts-stat-num">' + needed.length + '</div><div class="parts-stat-label">part' + (needed.length === 1 ? '' : 's') + ' missing</div></div>' +
+      '<div class="parts-stat' + (blocked ? ' parts-stat-bad' : '') + '"><div class="parts-stat-num">' + blocked + '</div><div class="parts-stat-label">order' + (blocked === 1 ? '' : 's') + ' waiting</div></div>' +
+      '<div class="parts-stat parts-stat-good"><div class="parts-stat-num">' + Math.max(open - blocked, 0) + '</div><div class="parts-stat-label">ready to pick</div></div>' +
+    '</div>' +
+    (blocked ? '<button class="parts-oor-link" onclick="showWaitingInOOR()">See waiting orders in OOR →</button>' : '');
+
+  if (!needed.length) {
+    list.innerHTML = '<div class="empty-state"><div class="empty-icon">✓</div><p>Nothing on the missing parts list.</p></div>';
+    return;
+  }
+
+  // Parts holding up the most orders first, then the earliest promise date
+  needed.sort(function(a, b) {
+    var d1 = (b.orders || []).length - (a.orders || []).length;
+    if (d1) return d1;
+    var pa = (a.orders[0] || {}).promiseDate || '9999', pb = (b.orders[0] || {}).promiseDate || '9999';
+    return pa < pb ? -1 : pa > pb ? 1 : 0;
+  });
+
+  list.innerHTML = '<div class="section-label" style="margin-top:4px">On the list</div>' + needed.map(function(n) {
+    var orders = n.orders || [];
+    var ordersHtml = orders.length
+      ? '<div class="need-orders-label">Holding up ' + orders.length + ' order line' + (orders.length === 1 ? '' : 's') + '</div>' +
+        orders.map(function(o) {
+          return '<div class="need-order">' +
+            '<div class="need-order-main"><strong>#' + escHtml(o.orderNo) + '</strong> &nbsp;·&nbsp; ' + escHtml(o.location || '—') +
+              '<div class="need-order-code">' + escHtml(o.itemCode) + '</div></div>' +
+            '<div class="need-order-side">' + escHtml(o.qtyOrdered) + ' ' + escHtml(o.uom || '') +
+              '<div class="need-order-date">Promise ' + fmtDate(o.promiseDate) + '</div></div>' +
+          '</div>';
+        }).join('')
+      : '<div class="need-none">No open orders need this right now</div>';
+
+    return '<div class="need-card' + (orders.length ? ' need-card-bad' : '') + '">' +
+      '<div class="need-top">' +
+        '<div class="need-code">' + escHtml(n.part) + '</div>' +
+        '<button class="need-remove" onclick="removeNeededPart(' + n._i + ')" aria-label="Remove">✕</button>' +
+      '</div>' +
+      '<div class="need-meta">Added ' + escHtml(n.date || '—') + (n.note ? ' &nbsp;·&nbsp; ' + escHtml(n.note) : '') + '</div>' +
+      ordersHtml +
+    '</div>';
+  }).join('');
+}
+
 
 // ── Error panel ───────────────────────────────────────────
 // Red panel pinned to the bottom listing everything that blocked a save.
