@@ -45,6 +45,7 @@
       <button class="tab-btn active" id="tab-scan"    onclick="switchTab('scan')">Scan orders</button>
       <button class="tab-btn"        id="tab-package" onclick="switchTab('package')">Package orders</button>
       <button class="tab-btn"        id="tab-oor"     onclick="switchTab('oor')">OOR</button>
+      <button class="tab-btn"        id="tab-parts"   onclick="switchTab('parts')">Parts</button>
     </nav>
   </header>
 
@@ -134,6 +135,27 @@
       <input class="search-input" id="oorSearch" type="text" placeholder="Search order # or location…" oninput="renderOOR()" autocomplete="off"/>
     </div>
     <div id="oorList"></div>
+  </div>
+
+  <!-- MISSING PARTS TAB -->
+  <div class="page" id="page-parts">
+    <div class="page-header">
+      <div><h1>Missing parts</h1><p class="page-sub">Parts we're out of, checked against open orders</p></div>
+    </div>
+    <div class="parts-add">
+      <div class="section-label">Add a part</div>
+      <div class="field-row parts-field-row">
+        <input type="text" id="partInput" placeholder="Start typing, e.g. 205" autocomplete="off" autocapitalize="characters" spellcheck="false"
+               oninput="partSuggest()" onkeydown="partInputKey(event)"/>
+        <button class="scan-btn" onclick="openScanner('partInput')" aria-label="Scan part">&#9641;</button>
+      </div>
+      <div class="part-suggest" id="partSuggest"></div>
+      <input type="text" id="partNote" class="parts-note" placeholder="Note (optional)" maxlength="200" autocomplete="off"
+             onkeydown="if(event.key==='Enter') addNeededPart()"/>
+      <button class="btn-save parts-add-btn" id="addPartBtn" onclick="addNeededPart()">+ Add to list</button>
+    </div>
+    <div id="partsSummary"></div>
+    <div id="partsList"></div>
   </div>
 
   <!-- SCANNER MODAL -->
