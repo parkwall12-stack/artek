@@ -1169,6 +1169,21 @@ function savePackageDraft() {
       showErrorPanel('Couldn\'t save order #' + _currentPkgData.header.orderNumber, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
     });
 }
+// Most that can ship without over-sending. Foot-based parts cut to a set
+// length round up to whole pieces: 9 ft of 112" bars = 1 bar = 9.33 ft.
+// Everything else (EACH, no length in the code) must match exactly.
+function maxShippable(item) {
+  var req   = Number(item.qtyRequired) || 0;
+  var uom   = String(item.uom || '').toUpperCase();
+  var lenIn = trailingLength(item.itemCode);
+  if ((uom === 'FEET' || uom === 'FT') && lenIn && lenIn > 0) {
+    var pieceFt = lenIn / 12;
+    var pieces  = Math.ceil(req / pieceFt - 1e-9);
+    return Math.round(pieces * pieceFt * 100) / 100;
+  }
+  return req;
+}
+
 // Everything that stops an order from being completed, in plain words
 function packagingProblems() {
   var items  = (_currentPkgData && _currentPkgData.items) || [];
@@ -1187,10 +1202,18 @@ function packagingProblems() {
   });
 
   items.forEach(function(item) {
-    var boxed = totals[item.itemCode] || 0;
+    var boxed = Math.round((totals[item.itemCode] || 0) * 100) / 100;
     var req   = Number(item.qtyRequired) || 0;
-    if (!(boxed > 0))              out.push(item.itemCode + ': not in any box yet');
-    else if (req > 0 && boxed < req) out.push(item.itemCode + ': short — ' + boxed + ' of ' + req + ' ' + (item.uom||'') + ' boxed');
+    var max   = maxShippable(item);
+    var uom   = item.uom || '';
+    if (!(boxed > 0)) {
+      out.push(item.itemCode + ': not in any box yet');
+    } else if (req > 0 && boxed < req) {
+      out.push(item.itemCode + ': short — ' + boxed + ' of ' + req + ' ' + uom + ' boxed');
+    } else if (req > 0 && boxed > max + 0.01) {
+      out.push(item.itemCode + ': too many — ' + boxed + ' ' + uom + ' boxed, order is ' + req +
+               (max > req ? ' (max ' + max + ' with whole pieces)' : ''));
+    }
   });
 
   return out;
