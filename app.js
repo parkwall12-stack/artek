@@ -24,6 +24,9 @@ var _pickReturn      = 'lookup'; // where Back/Save goes: 'lookup' or 'detail'
 // Missing-parts tab is on hold. Flip to true to bring back the Parts tab
 // and the "Missing part" flags on the OOR tab.
 var FEATURE_PARTS    = false;
+// Weight check: a part line or a box total more than this many lbs off from
+// Item Wts gets flagged, and Complete shows a double-check pop-up
+var WT_ALERT_LBS     = 6;
 var _partsData       = null;     // { needed, catalog, openOrderCount, blockedOrderCount }
 var _partSuggestions = [];
 
@@ -1008,6 +1011,7 @@ function renderPackageDetail(data) {
         ' &nbsp;·&nbsp; ' + (h.location||'—') +
         ' &nbsp;·&nbsp; Status: ' + h.status +
       '</div>' +
+      (orderWeightText(data.items) ? '<div class="pick-order-meta" style="margin-top:4px">' + escHtml(orderWeightText(data.items)) + '</div>' : '') +
     '</div>';
   document.getElementById('pkgItemsList').innerHTML = '<div id="boxesList"></div>';
   renderAllBoxes();
@@ -1032,9 +1036,10 @@ function renderBoxSection(box, bIdx, items, isLast) {
       (bIdx > 0 ? '<button class="delete-box-btn" onclick="deleteBox(' + bIdx + ')">✕ Remove box</button>' : '') +
     '</div>' +
     '<div id="box-' + bIdx + '-parts">' + partsHtml + '</div>' +
-    '<div class="box-action-row">' +
+    '<div class="box-action-row" style="flex-wrap:wrap;align-items:center">' +
       '<button class="add-part-to-box-btn" onclick="addPartToBox(' + bIdx + ')">+ Add part to box</button>' +
       (isLast ? '<button class="add-new-box-btn" onclick="addNewBox()">+ Add box</button>' : '') +
+      '<div id="box-wt-' + bIdx + '" style="margin-left:auto;display:flex;gap:6px">' + boxWeightBar(bIdx) + '</div>' +
     '</div>' +
     '<button class="print-box-btn" onclick="printBoxTag(' + bIdx + ')">🖨 Print tag for Box ' + (bIdx + 1) + '</button>' +
   '</div>';
@@ -1059,6 +1064,7 @@ function renderPartEntry(bIdx, pIdx, part, items, canRemove) {
         '<input type="number" value="' + (part.weight||'') + '" placeholder="0" oninput="updatePartField(' + bIdx + ',' + pIdx + ',\'weight\',this.value)"/>' +
       '</div>' +
     '</div>' +
+    '<div id="wt-hint-' + bIdx + '-' + pIdx + '" style="font-size:.8rem;line-height:1.4;margin:-2px 0 10px">' + weightHintHtml(part) + '</div>' +
     '<div class="pkg-photo-field">' +
       '<input type="file" accept="image/*" capture="environment" id="photo-input-' + bIdx + '-' + pIdx + '" style="display:none" onchange="handleBoxPhotoNew(' + bIdx + ',' + pIdx + ',this)"/>' +
       '<button class="photo-btn" onclick="document.getElementById(\'photo-input-' + bIdx + '-' + pIdx + '\').click()">📷 Take photo</button>' +
@@ -1070,6 +1076,10 @@ function renderPartEntry(bIdx, pIdx, part, items, canRemove) {
 function updatePartField(bIdx, pIdx, field, value) {
   if (!_pkgBoxes[bIdx] || !_pkgBoxes[bIdx].parts[pIdx]) return;
   _pkgBoxes[bIdx].parts[pIdx][field] = (field === 'qty' || field === 'weight') ? (parseFloat(value) || 0) : value;
+  // Live weight check without re-rendering (keeps the cursor in the field)
+  var hint = document.getElementById('wt-hint-' + bIdx + '-' + pIdx);
+  if (hint) hint.innerHTML = weightHintHtml(_pkgBoxes[bIdx].parts[pIdx]);
+  refreshBoxWeight(bIdx);
 }
 
 function addPartToBox(bIdx) {
@@ -1202,2010 +1212,218 @@ function maxShippable(item) {
   return req;
 }
 
-// Everything that stops an order from being completed, in plain words
-function packagingProblems() {
-  var items  = (_currentPkgData && _currentPkgData.items) || [];
-  var totals = {}, out = [];
+// ── Weight check (Item Wts) ───────────────────────────────
+// Estimated = qty × ShipWeight from Item Wts. Actual = what was typed in
+// each part's Weight box; a box's actual is the sum of its parts.
 
-  _pkgBoxes.forEach(function(box, bIdx) {
-    box.parts.forEach(function(part) {
-      if (!part.itemCode) {
-        out.push('Box ' + (bIdx+1) + ': empty part slot — select a part or remove it');
-        return;
-      }
-      var q = parseFloat(part.qty) || 0;
-      if (!(q > 0)) out.push('Box ' + (bIdx+1) + ': ' + part.itemCode + ' has no quantity entered');
-      totals[part.itemCode] = (totals[part.itemCode] || 0) + q;
-    });
-  });
-
-  items.forEach(function(item) {
-    var boxed = Math.round((totals[item.itemCode] || 0) * 100) / 100;
-    var req   = Number(item.qtyRequired) || 0;
-    var max   = maxShippable(item);
-    var uom   = item.uom || '';
-    if (!(boxed > 0)) {
-      out.push(item.itemCode + ': not in any box yet');
-    } else if (req > 0 && boxed < req) {
-      out.push(item.itemCode + ': short — ' + boxed + ' of ' + req + ' ' + uom + ' boxed');
-    } else if (req > 0 && boxed > max + 0.01) {
-      out.push(item.itemCode + ': too many — ' + boxed + ' ' + uom + ' boxed, order is ' + req +
-               (max > req ? ' (max ' + max + ' with whole pieces)' : ''));
-    }
-  });
-
-  return out;
+function itemFor(code) {
+  return ((_currentPkgData && _currentPkgData.items) || []).filter(function(i) { return i.itemCode === code; })[0];
 }
 
-function completeOrder() {
-  var payload = collectPackagePayload(true);
-  if (!payload) return;
-  var orderNo = _currentPkgData.header.orderNumber;
+function unitLabel(uom) {
+  var u = String(uom || '').toUpperCase();
+  return (u === 'EACH' || u === 'EA') ? 'ea' : (u === 'FEET' || u === 'FT') ? 'ft' : String(uom || '').toLowerCase();
+}
 
-  var problems = packagingProblems();
-  if (problems.length) {
-    showErrorPanel('Can\'t complete order #' + orderNo + ' — fix ' + (problems.length === 1 ? 'this' : 'these') + ' first:', problems);
-    return;
+function fmtLbs(n) {
+  n = Number(n) || 0;
+  var f = Math.abs(n) >= 10 ? 10 : 100;
+  return String(Math.round(n * f) / f);
+}
+
+// One part line. null when no part is picked; expected is null until there
+// is a qty and the part has a weight on file.
+function weightCheck(part) {
+  var it = part && part.itemCode ? itemFor(part.itemCode) : null;
+  if (!it) return null;
+  var per = Number(it.wtPerUnit) || 0, qty = parseFloat(part.qty) || 0, actual = parseFloat(part.weight) || 0;
+  var r = { code: part.itemCode, per: per, unit: unitLabel(it.uom), qty: qty, actual: actual,
+            expected: null, diff: 0, off: false };
+  if (per > 0 && qty > 0) {
+    r.expected = Math.round(qty * per * 100) / 100;
+    r.diff     = Math.round((actual - r.expected) * 100) / 100;
+    r.off      = Math.abs(r.diff) > WT_ALERT_LBS;
   }
-  hideErrorPanel();
-
-  var btn = document.getElementById('completePkgBtn');
-  btn.disabled = true; btn.textContent = 'Completing…';
-
-  apiFetch('savePackageData', payload)
-    .then(function(res) {
-      btn.disabled = false; btn.textContent = '✓ Complete order';
-      if (!res.success) {
-        showErrorPanel('Couldn\'t complete order #' + orderNo, [res.error || 'Unknown error from server']);
-        return;
-      }
-
-      var h = _currentPkgData.header;
-      var pdfBase64 = null, photos = [];
-      try {
-        pdfBase64 = generatePDFBase64();
-        photos    = collectPhotos();
-      } catch (e) {
-        // The order itself is saved — only the tag PDF / photos failed.
-        // Stay on this screen so the message can be read.
-        showToast('Order complete!', 'success');
-        showErrorPanel('Order #' + orderNo + ' is complete, but the tags/photos didn\'t upload', [
-          (e && e.message) || String(e),
-          'Tap Back, open the order and use 🖨 Print tags to reprint.'
-        ]);
-        return;
-      }
-
-      photos.forEach(function(p) {
-        _sessionPhotos[h.orderNumber + '|' + p.boxIdx + '|' + p.partCode] =
-          'data:image/' + (p.ext === 'png' ? 'png' : 'jpeg') + ';base64,' + p.base64;
-      });
-
-      // Background — screen closes without waiting on Drive
-      if (pdfBase64 || photos.length) {
-        apiFetchPost({
-          action: 'saveOrderFiles',
-          orderNo: h.orderNumber,
-          location: h.location || 'MCM',
-          completionDate: h.promiseDate || new Date().toISOString().split('T')[0],
-          pdfBase64: pdfBase64,
-          photos: photos
-        }).then(function(fr) {
-          if (fr && fr.success) showToast('Files saved to Drive', 'success');
-          else showErrorPanel('Order #' + orderNo + ' completed, but Drive upload failed', [(fr && fr.error) || 'Unknown error from Drive']);
-        }).catch(function(err) {
-          showErrorPanel('Order #' + orderNo + ' completed, but Drive upload failed', ['Connection problem — ' + ((err && err.message) || 'check signal')]);
-        });
-      }
-
-      showToast('Order complete!', 'success');
-      setTimeout(exitPackageDetail, 700);
-    })
-    .catch(function(err) {
-      btn.disabled = false; btn.textContent = '✓ Complete order';
-      showErrorPanel('Couldn\'t complete order #' + orderNo, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
-    });
-}
-function exitPackageDetail() {
-  hideErrorPanel();
-  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-  var returnTab = _pkgReturnTab || 'package';
-  document.getElementById('tab-' + returnTab).classList.add('active');
-  document.getElementById('page-' + returnTab).classList.add('active');
-  if (returnTab === 'scan')     loadOrders();
-  else if (returnTab === 'oor') loadOOR();
-  else                          loadPackageOrders();
-  _pkgReturnTab = null;
+  return r;
 }
 
-// ── PDF Generation ────────────────────────────────────────
-
-function renderPDFTag(doc, data) {
-  doc.setTextColor(0, 0, 0);
-  var x = 8; var y = 18; var gap = 14;
-  doc.setFont(undefined, 'bold'); doc.setFontSize(13);
-  doc.text('McMaster-Carr', x, y); y += 10;
-  doc.text(String(data.location || '—'), x, y); y += gap;
-  doc.setFont(undefined, 'normal'); doc.setFontSize(11);
-  doc.text('P.O. # ' + String(data.po || '—'), x, y); y += gap;
-  doc.text('LOT # ' + String(data.lotNumber || '—'), x, y); y += gap;
-  doc.text('Part #:', x, y); y += 9;
-  doc.setFont(undefined, 'bold'); doc.setFontSize(9);
-  doc.text(String(data.partCode || '—'), x, y); y += gap;
-  doc.setFont(undefined, 'normal'); doc.setFontSize(11);
-  doc.text('QTY: ' + String(data.qty || 0) + ' ' + String(data.uom || 'Feet'), x, y); y += gap;
-  doc.text('QTY ______ of ______', x, y);
+function weightHintHtml(part) {
+  var c = weightCheck(part);
+  if (!c) return '';
+  if (!(c.per > 0)) return '<span style="color:#64748b">No weight on file in Item Wts</span>';
+  if (c.expected === null) return '<span style="color:#64748b">Item Wts: ' + fmtLbs(c.per) + ' lb/' + c.unit + '</span>';
+  var basis = fmtLbs(c.qty) + ' ' + c.unit + ' × ' + fmtLbs(c.per) + ' lb/' + c.unit;
+  if (!(c.actual > 0)) return '<span style="color:#475569">Estimated ≈ <strong>' + fmtLbs(c.expected) + ' lbs</strong> (' + basis + ')</span>';
+  if (c.off) return '<span style="color:#b45309;font-weight:600">⚠ Estimated ≈ ' + fmtLbs(c.expected) + ' lbs, entered ' + fmtLbs(c.actual) + ' lbs — double-check</span>';
+  return '<span style="color:#047857;font-weight:600">✓ Weight checks out (estimated ≈ ' + fmtLbs(c.expected) + ' lbs)</span>';
 }
 
-function buildTagEntries(boxesFlat) {
-  var byPart = {};
-  boxesFlat.forEach(function(e) {
-    if (!byPart[e.itemCode]) byPart[e.itemCode] = [];
-    byPart[e.itemCode].push(e);
+// Totals for one box. A box total is only compared when every part in it
+// has an estimate — otherwise the estimate would be short by design.
+function boxWeights(bIdx) {
+  var box = _pkgBoxes[bIdx];
+  var r = { rows: [], est: 0, actual: 0, unknown: 0, off: false, diff: 0 };
+  if (!box) return r;
+  box.parts.forEach(function(p) {
+    var c = weightCheck(p);
+    if (!c) return;
+    r.rows.push(c);
+    r.actual += c.actual;
+    if (c.expected !== null) r.est += c.expected; else r.unknown++;
   });
-  var entries = [];
-  Object.keys(byPart).forEach(function(code) {
-    var arr = byPart[code].slice().sort(function(a,b) { return a.boxIndex - b.boxIndex; });
-    arr.forEach(function(e, i) {
-      entries.push({ itemCode:code, qty:e.qty, pkgIndex:i+1, pkgTotal:arr.length, boxIndex:e.boxIndex });
-    });
-  });
-  entries.sort(function(a,b) { return a.boxIndex - b.boxIndex; });
-  return entries;
+  r.est    = Math.round(r.est * 100) / 100;
+  r.actual = Math.round(r.actual * 100) / 100;
+  r.diff   = Math.round((r.actual - r.est) * 100) / 100;
+  r.off    = r.rows.length > 0 && r.unknown === 0 && Math.abs(r.diff) > WT_ALERT_LBS;
+  return r;
 }
 
-function buildTagDoc(hdr, items, boxesFlat) {
-  var jsPDFLib = window.jspdf ? window.jspdf.jsPDF : (window.jsPDF || null);
-  if (!jsPDFLib) return null;
-  var itemInfo = {};
-  items.forEach(function(item) { itemInfo[item.itemCode] = item; });
-  var entries = buildTagEntries(boxesFlat);
-  if (entries.length === 0) return null;
-
-  var doc = null;
-  entries.forEach(function(entry) {
-    var info = itemInfo[entry.itemCode] || {};
-    if (!doc) { doc = new jsPDFLib({ orientation:'portrait', unit:'mm', format:[101.6, 152.4] }); }
-    else       { doc.addPage([101.6, 152.4], 'portrait'); }
-    renderPDFTag(doc, {
-      location:  hdr.location || '—',
-      po:        hdr.po || '—',
-      lotNumber: info.lotNumber || '—',
-      partCode:  entry.itemCode,
-      qty:       entry.qty,
-      uom:       info.uom || 'Feet',
-      pkgIndex:  entry.pkgIndex,
-      pkgTotal:  entry.pkgTotal
-    });
-  });
-  return doc;
+// The two tiles across from "+ Add part" / "+ Add box"
+function boxWeightBar(bIdx) {
+  var w = boxWeights(bIdx);
+  if (!w.rows.length) return '';
+  var tile = 'display:flex;flex-direction:column;align-items:flex-end;justify-content:center;min-width:76px;height:44px;padding:0 10px;' +
+             'border-radius:8px;cursor:pointer;font:inherit;line-height:1.15;border:1px solid ';
+  var calm = tile + '#cbd5e1;background:#ffffff;color:#334155';
+  var warn = tile + '#f59e0b;background:#fffbeb;color:#92400e';
+  var est  = w.rows.length === w.unknown ? '—' : fmtLbs(w.est) + (w.unknown ? '+' : '');
+  return '<button type="button" onclick="showBoxWeights(' + bIdx + ')" style="' + calm + '" aria-label="Estimated box weight — tap for details">' +
+           '<span style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:#64748b">Est. box</span>' +
+           '<span style="font-size:.9rem;font-weight:700">' + est + ' lbs</span>' +
+         '</button>' +
+         '<button type="button" onclick="showBoxWeights(' + bIdx + ')" style="' + (w.off ? warn : calm) + '" aria-label="Actual box weight — tap for details">' +
+           '<span style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:' + (w.off ? '#92400e' : '#64748b') + '">Actual</span>' +
+           '<span style="font-size:.9rem;font-weight:700">' + fmtLbs(w.actual) + ' lbs</span>' +
+         '</button>';
 }
 
-function generatePDFBase64() {
-  if (!_currentPkgData) return null;
-  var boxesFlat = [];
-  _pkgBoxes.forEach(function(box, bIdx) {
-    box.parts.forEach(function(part) {
-      if (part.itemCode) boxesFlat.push({ itemCode:part.itemCode, boxIndex:bIdx+1, qty:part.qty||0 });
-    });
-  });
-  var doc = buildTagDoc(_currentPkgData.header, _currentPkgData.items || [], boxesFlat);
-  if (!doc) return null;
-  return doc.output('datauristring').split(',')[1];
+function refreshBoxWeight(bIdx) {
+  var el = document.getElementById('box-wt-' + bIdx);
+  if (el) el.innerHTML = boxWeightBar(bIdx);
 }
 
-function collectPhotos() {
-  var photos = [];
-  _pkgBoxes.forEach(function(box, bIdx) {
-    box.parts.forEach(function(part) {
-      if (part.photoUrl && part.photoUrl.indexOf('base64,') !== -1) {
-        var base64 = part.photoUrl.split('base64,')[1];
-        var ext    = part.photoUrl.indexOf('image/png') !== -1 ? 'png' : 'jpg';
-        photos.push({ boxIdx:bIdx+1, partCode:part.itemCode||'part', qty:part.qty||0, base64:base64, ext:ext });
-      }
-    });
+// Expected weight of the whole order at the quantities ordered
+function orderWeightText(items) {
+  var total = 0, any = false, missing = 0;
+  (items || []).forEach(function(it) {
+    var per = Number(it.wtPerUnit) || 0, req = Number(it.qtyRequired) || 0;
+    if (per > 0 && req > 0) { total += per * req; any = true; }
+    else if (req > 0) missing++;
   });
-  return photos;
+  if (!any) return '';
+  return 'Estimated order weight ≈ ' + fmtLbs(total) + ' lbs' +
+         (missing ? ' (' + missing + ' part' + (missing === 1 ? '' : 's') + ' not in Item Wts)' : '');
 }
 
-// Print tags for one box mid-pack, straight from what's on screen
-function printBoxTag(bIdx) {
-  if (!_currentPkgData || !_pkgBoxes[bIdx]) return;
+// ── Small pop-up window ───────────────────────────────────
 
-  var h        = _currentPkgData.header;
-  var items    = _currentPkgData.items || [];
-  var itemInfo = {};
-  items.forEach(function(item) { itemInfo[item.itemCode] = item; });
-
-  var parts = _pkgBoxes[bIdx].parts.filter(function(p) { return p.itemCode; });
-  if (!parts.length) { showToast('Select a part for this box first', 'error'); return; }
-
-  var jsPDFLib = window.jspdf ? window.jspdf.jsPDF : (window.jsPDF || null);
-  if (!jsPDFLib) { showToast('PDF library not loaded', 'error'); return; }
-
-  var doc = null;
-  parts.forEach(function(part) {
-    var info = itemInfo[part.itemCode] || {};
-    if (!doc) { doc = new jsPDFLib({ orientation:'portrait', unit:'mm', format:[101.6, 152.4] }); }
-    else       { doc.addPage([101.6, 152.4], 'portrait'); }
-    renderPDFTag(doc, {
-      location:  h.location || '—',
-      po:        h.po || '—',
-      lotNumber: info.lotNumber || '—',
-      partCode:  part.itemCode,
-      qty:       part.qty || 0,
-      uom:       info.uom || 'Feet'
-    });
-  });
-
-  var win = window.open(doc.output('bloburl'), '_blank');
-  if (!win) {
-    doc.save('ArTek_' + h.orderNumber + '_Box' + (bIdx + 1) + '.pdf');
-    showToast('Popup blocked — downloaded instead', 'info');
-  } else {
-    showToast('Box ' + (bIdx + 1) + ' tag ready', 'success');
+function openModal(innerHtml, labelledBy) {
+  var m = document.getElementById('appModal');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'appModal';
+    m.setAttribute('role', 'dialog');
+    m.setAttribute('aria-modal', 'true');
+    m.style.cssText = 'position:fixed;inset:0;z-index:1100;background:rgba(15,23,42,0.45);display:none;align-items:center;justify-content:center;padding:16px';
+    m.addEventListener('click', function(e) { if (e.target === m) closeModal(); });
+    document.body.appendChild(m);
   }
+  if (labelledBy) m.setAttribute('aria-labelledby', labelledBy);
+  m.innerHTML = '<div style="background:#ffffff;color:#1e293b;border-radius:12px;width:100%;max-width:460px;max-height:85vh;overflow:auto;' +
+                'box-shadow:0 20px 50px rgba(0,0,0,0.3);padding:18px 18px 16px;box-sizing:border-box">' + innerHtml + '</div>';
+  m.style.display = 'flex';
 }
 
-function reprintPDF(orderNo) {
-  apiFetch('getPackageOrder', { orderNo: String(orderNo) })
-    .then(function(data) {
-      if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
-      var items = data.items || [];
-      var boxes = data.boxes || {};
-
-      var boxesFlat = [];
-      Object.keys(boxes).forEach(function(itemCode) {
-        (boxes[itemCode] || []).forEach(function(box) {
-          boxesFlat.push({ itemCode:itemCode, boxIndex:box.boxIndex, qty:box.qtyInBox });
-        });
-      });
-      if (boxesFlat.length === 0) {
-        items.forEach(function(item) {
-          boxesFlat.push({ itemCode:item.itemCode, boxIndex:1, qty:item.qtyPulled||0 });
-        });
-      }
-
-      var doc = buildTagDoc(data.header, items, boxesFlat);
-      if (!doc) { showToast('No data for this order', 'error'); return; }
-
-      var win = window.open(doc.output('bloburl'), '_blank');
-      if (!win) {
-        doc.save('ArTek_Order_' + orderNo + '_tags.pdf');
-        showToast('Popup blocked — downloaded instead', 'info');
-      } else {
-        showToast('Tags ready to print!', 'success');
-      }
-    })
-    .catch(function() { showToast('Error loading order', 'error'); });
+function closeModal() {
+  var m = document.getElementById('appModal');
+  if (m) m.style.display = 'none';
 }
 
-// ── Photo lightbox ────────────────────────────────────────
-
-function openPhotoLightbox(src) {
-  var overlay = document.getElementById('photoLightbox');
-  if (!overlay) {
-    overlay = document.createElement('div');
-    overlay.id = 'photoLightbox';
-    overlay.className = 'photo-lightbox';
-    overlay.onclick = function() { overlay.classList.remove('active'); };
-    overlay.innerHTML = '<img id="photoLightboxImg"/>';
-    document.body.appendChild(overlay);
-  }
-  document.getElementById('photoLightboxImg').src = src;
-  overlay.classList.add('active');
+function modalHeader(id, title) {
+  return '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px">' +
+           '<h2 id="' + id + '" style="margin:0;font-size:1.05rem;font-weight:700">' + escHtml(title) + '</h2>' +
+           '<button type="button" onclick="closeModal()" aria-label="Close" style="width:36px;height:36px;flex-shrink:0;border:none;border-radius:8px;background:#f1f5f9;color:#475569;font-size:16px;cursor:pointer">✕</button>' +
+         '</div>';
 }
 
-// ── OOR ───────────────────────────────────────────────────
-
-function toggleArchiveView() {
-  _oorShowArchived = !_oorShowArchived;
-  var btn = document.getElementById('oorArchiveToggle');
-  if (btn) {
-    btn.textContent = _oorShowArchived ? '← Open orders' : '📁 Archived';
-    btn.className   = _oorShowArchived ? 'oor-toggle-btn active' : 'oor-toggle-btn';
-  }
-  loadOOR();
-}
-
-function loadOOR() {
-  _oorItemCache = {};
-  document.getElementById('oorList').innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
-
-  if (_oorShowArchived) {
-    apiFetch('getArchivedOrders')
-      .then(function(data) {
-        if (data && data.error) { showToast('Error: ' + data.error, 'error'); return; }
-        _archiveData = Array.isArray(data) ? data : [];
-        renderOOR();
-      })
-      .catch(function() { showToast('Error loading archive', 'error'); });
-  } else {
-    apiFetch('getOOROrderHeaders', null, '&fresh=1')
-      .then(function(data) {
-        if (data && data.error) { showToast('Error: ' + data.error, 'error'); return; }
-        _oorData = Array.isArray(data) ? data : [];
-        renderOOR();
-      })
-      .catch(function() { showToast('Error loading OOR', 'error'); });
-  }
-}
-function setOORFilter(f) {
-  _oorFilter = f;
-  renderOOR();
-}
-
-function renderOOR() {
-  var q    = document.getElementById('oorSearch') ? document.getElementById('oorSearch').value.toLowerCase().trim() : '';
-  var list = document.getElementById('oorList');
-
-  if (_oorShowArchived) {
-    var arch = _archiveData.filter(function(o) {
-      return !q || String(o.orderNumber).toLowerCase().indexOf(q) !== -1 || String(o.location||'').toLowerCase().indexOf(q) !== -1;
-    });
-    if (!arch.length) { list.innerHTML = '<div class="empty-state"><div class="empty-icon">📁</div><p>No archived orders.</p></div>'; return; }
-    list.innerHTML = arch.map(function(o, idx) {
-      return '<div class="oor-card" id="oor-' + idx + '">' +
-        '<div class="oor-card-header" onclick="toggleOOR(' + idx + ',\'' + o.orderNumber + '\',\'Archived\')">' +
-          '<div class="oor-order-icon">📁</div>' +
-          '<div class="oor-order-info">' +
-            '<div class="oor-order-num">Order #' + o.orderNumber + '</div>' +
-            '<div class="oor-order-meta">Archived ' + (o.timestamp||'') + (o.po ? ' &nbsp;·&nbsp; PO: ' + o.po : '') + '</div>' +
-          '</div>' +
-          '<div class="oor-badges"><span class="badge badge-loc">' + (o.location||'—') + '</span></div>' +
-          '<span class="oor-chevron">▶</span>' +
-        '</div>' +
-        '<div class="oor-items" id="oor-items-' + idx + '"><div class="oor-item-loading">Loading…</div></div>' +
-      '</div>';
-    }).join('');
-    return;
-  }
-
-  // Search first, so the counts match what a filter would actually show
-  var searched = _oorData.filter(function(o) {
-    return !q || String(o.orderNo).toLowerCase().indexOf(q) !== -1 || String(o.location||'').toLowerCase().indexOf(q) !== -1;
-  });
-
-  var bucket = function(s) {
-    if (s === 'Complete') return 'complete';
-    if (s === 'Packaging' || s === 'Picked' || s === 'Picking') return 'progress';
-    return 'open';
-  };
-
-  var isWaiting = function(o) { return FEATURE_PARTS && !!(o.missing && o.missing.length); };
-
-  var counts = { all: searched.length, complete: 0, progress: 0, open: 0, waiting: 0 };
-  searched.forEach(function(o) {
-    counts[bucket(o.wmsStatus)]++;
-    if (isWaiting(o)) counts.waiting++;
-  });
-
-  var chip = function(key, label) {
-    return '<button class="oor-filter-btn' + (_oorFilter === key ? ' active' : '') + '" onclick="setOORFilter(\'' + key + '\')">' +
-      label + ' <span class="oor-filter-count">' + counts[key] + '</span></button>';
-  };
-
-  var filterBar = '<div class="oor-filter-bar">' +
-    chip('all', 'All') +
-    (counts.waiting || _oorFilter === 'waiting' ? chip('waiting', '⚠ Waiting on parts') : '') +
-    chip('complete', '✓ Complete') +
-    chip('progress', 'In progress') +
-    chip('open', 'Not started') +
-  '</div>';
-
-  var filtered = (_oorFilter === 'all')     ? searched :
-                 (_oorFilter === 'waiting') ? searched.filter(isWaiting) :
-                 searched.filter(function(o) { return bucket(o.wmsStatus) === _oorFilter; });
-
-  // Complete first, then in-progress, then untouched — order # within each group
-  var rank = function(s) {
-    if (s === 'Complete') return 0;
-    if (s === 'Packaging' || s === 'Picked' || s === 'Picking') return 1;
-    return 2;
-  };
-  filtered.sort(function(a, b) {
-    var d = rank(a.wmsStatus) - rank(b.wmsStatus);
-    return d !== 0 ? d : Number(a.orderNo) - Number(b.orderNo);
-  });
-
-  if (!filtered.length) {
-    list.innerHTML = filterBar + '<div class="empty-state"><div class="empty-icon">📦</div><p>No orders in this view.</p></div>';
-    return;
-  }
-
-  list.innerHTML = filterBar + filtered.map(function(o, idx) {
-    var locBadge = '<span class="badge badge-loc">' + (o.location||'—') + '</span>' +
-                   (isWaiting(o) ? '<span class="badge badge-missing">Missing part</span>' : '');
-    var wmsBadge = isDoneStatus(o.wmsStatus) ? '<span class="badge badge-done">✓ Done</span>' :
-                   o.wmsStatus === 'Picking' ? '<span class="badge badge-draft">Draft</span>' :
-                   (o.wmsStatus === 'Packaging' || o.wmsStatus === 'Picked') ? '<span class="badge badge-inprog">In WMS</span>' : '';
-    return '<div class="oor-card" id="oor-' + idx + '">' +
-      '<div class="oor-card-header" onclick="toggleOOR(' + idx + ',\'' + o.orderNo + '\',\'' + (o.wmsStatus||'') + '\')">' +
-        '<div class="oor-order-icon">📦</div>' +
-        '<div class="oor-order-info">' +
-          '<div class="oor-order-num">Order #' + o.orderNo + '</div>' +
-          '<div class="oor-order-meta">' + o.itemCount + ' item' + (o.itemCount !== 1 ? 's' : '') + '</div>' +
-        '</div>' +
-        '<div class="oor-badges">' + locBadge + wmsBadge + '</div>' +
-        '<span class="oor-chevron">▶</span>' +
-      '</div>' +
-      '<div class="oor-items" id="oor-items-' + idx + '"><div class="oor-item-loading">Loading…</div></div>' +
-    '</div>';
+// Table for one box: part | actual | estimated
+function showBoxWeights(bIdx) {
+  var w = boxWeights(bIdx);
+  var th = 'padding:8px 6px;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#64748b;border-bottom:2px solid #e2e8f0';
+  var td = 'padding:9px 6px;border-bottom:1px solid #e2e8f0;font-size:.85rem;vertical-align:top';
+  var rows = w.rows.map(function(c) {
+    var bg  = c.off ? 'background:#fffbeb;' : '';
+    var act = c.actual > 0 ? fmtLbs(c.actual) + ' lbs' : '<span style="color:#94a3b8">not entered</span>';
+    var est = c.expected !== null ? fmtLbs(c.expected) + ' lbs'
+            : '<span style="color:#94a3b8">' + (c.per > 0 ? 'no qty' : 'not in Item Wts') + '</span>';
+    return '<tr style="' + bg + '">' +
+      '<td style="' + td + ';font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.78rem;word-break:break-all">' +
+        (c.off ? '<span style="color:#b45309;font-weight:700">⚠ </span>' : '') + escHtml(c.code) +
+        '<div style="font-family:inherit;color:#64748b;font-size:.72rem;margin-top:2px">' + fmtLbs(c.qty) + ' ' + c.unit + '</div></td>' +
+      '<td style="' + td + ';text-align:right;white-space:nowrap;font-weight:600">' + act + '</td>' +
+      '<td style="' + td + ';text-align:right;white-space:nowrap">' + est + '</td>' +
+    '</tr>';
   }).join('');
+  var totalEst = w.rows.length === w.unknown ? '—' : fmtLbs(w.est) + ' lbs' + (w.unknown ? '*' : '');
+  var html = modalHeader('wtModalTitle', 'Box ' + (bIdx + 1) + ' weights') +
+    '<table style="width:100%;border-collapse:collapse">' +
+      '<thead><tr><th style="' + th + ';text-align:left">Part</th><th style="' + th + ';text-align:right">Actual</th><th style="' + th + ';text-align:right">Estimated</th></tr></thead>' +
+      '<tbody>' + (rows || '<tr><td colspan="3" style="' + td + ';color:#64748b">No parts in this box yet.</td></tr>') + '</tbody>' +
+      '<tfoot><tr style="' + (w.off ? 'background:#fffbeb;' : '') + '">' +
+        '<td style="padding:10px 6px;font-weight:700">Box total</td>' +
+        '<td style="padding:10px 6px;text-align:right;font-weight:700;white-space:nowrap">' + fmtLbs(w.actual) + ' lbs</td>' +
+        '<td style="padding:10px 6px;text-align:right;font-weight:700;white-space:nowrap">' + totalEst + '</td>' +
+      '</tr></tfoot>' +
+    '</table>' +
+    '<p style="margin:10px 0 0;font-size:.75rem;color:#64748b;line-height:1.4">Estimated = quantity × weight from Item Wts. ' +
+      '⚠ = more than ' + WT_ALERT_LBS + ' lbs off.' + (w.unknown ? ' * Leaves out parts with no estimate.' : '') + '</p>';
+  openModal(html, 'wtModalTitle');
 }
 
-function toggleOOR(idx, orderNo, wmsStatus) {
-  var card     = document.getElementById('oor-' + idx);
-  var itemsDiv = document.getElementById('oor-items-' + idx);
-  if (!card) return;
-  if (card.classList.contains('open')) { card.classList.remove('open'); return; }
-  card.classList.add('open');
-
-  if (_oorItemCache[orderNo]) {
-    if (_oorItemCache[orderNo].items) renderOORItemsWithBoxes(itemsDiv, _oorItemCache[orderNo]);
-    else renderOORItems(itemsDiv, _oorItemCache[orderNo], orderNo);
-    return;
-  }
-
-  itemsDiv.innerHTML = '<div class="oor-item-loading">Loading…</div>';
-
-  if (isDoneStatus(wmsStatus)) {
-    apiFetch('getPackageOrder', { orderNo: String(orderNo) })
-      .then(function(data) {
-        if (data.error) { itemsDiv.innerHTML = '<div class="oor-item-loading">' + data.error + '</div>'; return; }
-        _oorItemCache[orderNo] = data;
-        renderOORItemsWithBoxes(itemsDiv, data);
-      })
-      .catch(function() { itemsDiv.innerHTML = '<div class="oor-item-loading">Error loading.</div>'; });
-  } else {
-    apiFetch('getOOROrderItems', { orderNo: String(orderNo) })
-      .then(function(items) {
-        if (!Array.isArray(items)) items = [];
-        _oorItemCache[orderNo] = items;
-        renderOORItems(itemsDiv, items, orderNo);
-      })
-      .catch(function() { itemsDiv.innerHTML = '<div class="oor-item-loading">Error loading.</div>'; });
-  }
-}
-
-function renderOORItems(container, items, orderNo) {
-  if (!items || !items.length) { container.innerHTML = '<div class="oor-item-loading">No items found.</div>'; return; }
-  var hdr     = _oorData.filter(function(o) { return String(o.orderNo) === String(orderNo); })[0];
-  var missing = (FEATURE_PARTS && hdr && hdr.missing) || [];
-  container.innerHTML = items.map(function(item) {
-    var short = missing.filter(function(p) { return sameMaterial(p, item.itemCode); })[0];
-    return '<div class="oor-item' + (short ? ' oor-item-missing' : '') + '">' +
-      '<div style="flex:1;min-width:0"><div class="oor-item-code">' + (item.itemCode||'—') + '</div><div class="oor-item-desc">' + (item.description||'') + '</div>' +
-        (short ? '<div class="oor-item-missing-note">⚠ Out of ' + escHtml(short) + '</div>' : '') + '</div>' +
-      '<div class="oor-item-qty">' + (item.qtyOrdered||0) + ' ' + (item.uom||'') + '</div>' +
-    '</div>';
-  }).join('') +
-  '<div class="oor-action-row">' +
-    '<button class="oor-action-btn" onclick="reprintPDF(\'' + orderNo + '\')">🖨 Print tags</button>' +
-    '<button class="oor-action-btn oor-action-btn-view" onclick="viewOrderFromOOR(\'' + orderNo + '\')">📋 View order</button>' +
-  '</div>';
-}
-
-function renderOORItemsWithBoxes(container, data) {
-  var items  = data.items  || [];
-  var boxes  = data.boxes  || {};
-  var header = data.header || {};
-  if (!items.length) { container.innerHTML = '<div class="oor-item-loading">No items.</div>'; return; }
-  var noteText = header.status === 'Archived'
-    ? '📁 Order shipped and archived'
-    : '✓ Order packaged and complete';
-  var when = fmtStamp(header.completedAt);
-  var arch = fmtStamp(header.archivedAt);
-  var whenText = when ? 'Completed ' + when + (arch ? ' · Archived ' + arch : '') : '';
-  container.innerHTML = '<div class="oor-complete-note">' + noteText +
-      (whenText ? '<div style="margin-top:2px;font-size:.78rem;font-weight:500;color:#64748b">' + escHtml(whenText) + '</div>' : '') +
-    '</div>' +
-    items.map(function(item) {
-      var code      = item.itemCode || '—';
-      var itemBoxes = (boxes[code] || []).slice().sort(function(a,b) { return a.boxIndex - b.boxIndex; });
-      var boxHtml   = itemBoxes.length
-        ? '<div class="oor-item-boxes">' +
-            itemBoxes.map(function(b) {
-              return '<span class="box-tag">Box ' + b.boxIndex + ': ' + b.qtyInBox + ' ' + (item.uom||'') + ' · ' + b.weight + ' lbs</span>';
-            }).join('') + '</div>'
-        : '';
-      return '<div class="oor-item">' +
-        '<div style="flex:1;min-width:0"><div class="oor-item-code">' + code + '</div>' +
-          (item.lotNumber ? '<div class="oor-item-desc">Lot: ' + item.lotNumber + '</div>' : '') +
-          boxHtml +
-        '</div>' +
-        '<div class="oor-item-qty">' + (item.qtyRequired||item.qtyPulled||0) + ' ' + (item.uom||'') + '</div>' +
-      '</div>';
-    }).join('') +
-    '<div class="oor-action-row">' +
-      '<button class="oor-action-btn" onclick="reprintPDF(\'' + (header.orderNumber||'') + '\')">🖨 Print tags</button>' +
-      '<button class="oor-action-btn oor-action-btn-view" onclick="viewOrderFromOOR(\'' + (header.orderNumber||'') + '\')">📋 View order</button>' +
-    '</div>';
-}
-
-function viewOrderFromOOR(orderNo) {
-  hideErrorPanel();
-  _pkgReturnTab = 'oor';
-  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-  document.getElementById('page-order-detail').classList.add('active');
-  document.getElementById('detailContent').innerHTML = '<p style="color:#94a3b8;text-align:center;padding:40px">Loading…</p>';
-  Promise.all([
-    apiFetch('getPackageOrder', { orderNo: String(orderNo) }),
-    apiFetch('getBoxPhotos',    { orderNo: String(orderNo) })
-  ]).then(function(results) {
-    var data   = results[0];
-    var photos = results[1];
-    if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
-    renderOrderDetail(data, Array.isArray(photos) ? photos : []);
-  }).catch(function() { showToast('Error loading order', 'error'); });
-}
-
-// ── Toast ─────────────────────────────────────────────────
-
-var _toastTimer = null;
-
-function showToast(msg, type) {
-  var t = document.getElementById('toast');
-  // Cancel the previous toast's hide timer so it can't cut this one short
-  clearTimeout(_toastTimer);
-  t.textContent = msg;
-  t.className = 'toast ' + (type || 'success');
-  setTimeout(function() { t.classList.add('show'); }, 10);
-  _toastTimer = setTimeout(function() { t.classList.remove('show'); }, 3200);
-}
-
-// ── Missing parts tab ─────────────────────────────────────
-// The list lives in the Parts_Needed tab so everyone sees the same one.
-// Each part is checked against open (not yet picked) OOR orders.
-
-// Same material, ignoring the prefix (FB vs FBMCM) and cut length (-120 vs -60)
-function sameMaterial(a, b) {
-  var ma = extractMiddleCode(extractPartCode(a)), mb = extractMiddleCode(extractPartCode(b));
-  if (!ma || !mb) return false;
-  if (ma === mb) return true;
-  var fp = /^FP/i.test(String(a).trim()) || /^FP/i.test(String(b).trim());
-  return fp && ma.length >= 4 && mb.length >= 4 && (ma.indexOf(mb) === 0 || mb.indexOf(ma) === 0);
-}
-
-var PART_RE = /^[A-Z][A-Z0-9]{1,7}-[A-Z0-9][A-Z0-9.\/]*(-[A-Z0-9.\/]+)*$/;
-
-function loadParts() {
-  hideErrorPanel();
-  var list = document.getElementById('partsList');
-  if (!_partsData) list.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
-  apiFetch('getPartsOverview')
-    .then(function(d) {
-      if (!d || d.error) {
-        list.innerHTML = '';
-        showErrorPanel('Couldn\'t load the parts list', [(d && d.error) || 'Unknown error from server']);
-        return;
-      }
-      _partsData = d;
-      renderParts();
-      partSuggest();
-    })
-    .catch(function(err) {
-      list.innerHTML = '';
-      showErrorPanel('Couldn\'t load the parts list', ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
-    });
-}
-
-function isOnNeededList(code) {
-  return ((_partsData && _partsData.needed) || []).some(function(n) { return n.part === code; });
-}
-
-// Type-ahead: "205" → FB-205VNL000-120. Codes whose material starts with
-// what you typed come first, then codes that contain it anywhere.
-function partSuggest() {
-  var input = document.getElementById('partInput');
-  var box   = document.getElementById('partSuggest');
-  if (!input || !box) return;
-  var q = input.value.trim().toUpperCase();
-  _partSuggestions = [];
-  if (q.length < 2 || !_partsData) { box.innerHTML = ''; return; }
-
-  var scored = [];
-  (_partsData.catalog || []).forEach(function(code) {
-    if (code === q) return;
-    var at = code.indexOf(q);
-    if (at === -1) return;
-    var mid = extractMiddleCode(code);
-    // "205" ranks FB-205VNL000-120 (whole number) above FB-2051VNL000-120
-    var score = mid.indexOf(q) === 0 ? (/\d/.test(mid.charAt(q.length)) ? 1 : 0) : at === 0 ? 2 : 3;
-    scored.push([score, code]);
-  });
-  scored.sort(function(a, b) { return a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0); });
-  _partSuggestions = scored.slice(0, 8).map(function(s) { return s[1]; });
-
-  if (!_partSuggestions.length) {
-    box.innerHTML = (_partsData.catalog || []).indexOf(q) !== -1 ? '' :
-      '<div class="part-suggest-empty">No matching part numbers — you can still add it as typed</div>';
-    return;
-  }
-  box.innerHTML = _partSuggestions.map(function(code, i) {
-    var at  = code.indexOf(q);
-    var hit = escHtml(code.slice(0, at)) + '<mark>' + escHtml(code.slice(at, at + q.length)) + '</mark>' + escHtml(code.slice(at + q.length));
-    return '<button type="button" class="part-suggest-item" onclick="pickSuggestion(' + i + ')"><span class="part-suggest-code">' + hit + '</span>' +
-      (isOnNeededList(code) ? '<span class="part-suggest-tag">on list</span>' : '') + '</button>';
-  }).join('');
-}
-
-function pickSuggestion(i) {
-  var code = _partSuggestions[i];
-  if (!code) return;
-  document.getElementById('partInput').value = code;
-  document.getElementById('partSuggest').innerHTML = '';
-  _partSuggestions = [];
-  var note = document.getElementById('partNote');
-  if (note) note.focus();
-}
-
-// Enter picks the top suggestion; Enter again adds it
-function partInputKey(e) {
-  if (e.key === 'Escape') { document.getElementById('partSuggest').innerHTML = ''; _partSuggestions = []; return; }
-  if (e.key !== 'Enter') return;
-  e.preventDefault();
-  if (_partSuggestions.length) pickSuggestion(0);
-  else addNeededPart();
-}
-
-function addNeededPart() {
-  var input = document.getElementById('partInput');
-  var note  = document.getElementById('partNote');
-  var part  = extractPartCode(input.value).toUpperCase();
-
-  if (!part) { showErrorPanel('Can\'t add a blank part', ['Type or scan a part number first.']); return; }
-  if (part.length > 40 || !PART_RE.test(part)) {
-    showErrorPanel('"' + part.slice(0, 40) + '" doesn\'t look like a part number', ['Part numbers look like FB-205VNL000-120.']);
-    return;
-  }
-  if (isOnNeededList(part)) { showErrorPanel(part + ' is already on the list', []); return; }
-
-  var known = ((_partsData && _partsData.catalog) || []).indexOf(part) !== -1;
-  if (!known && !confirm(part + ' isn\'t in the part list we know about. Add it anyway?')) return;
-
-  hideErrorPanel();
-  var btn = document.getElementById('addPartBtn');
-  btn.disabled = true; btn.textContent = 'Adding…';
-  apiFetch('addNeededPart', { part: part, note: (note.value || '').trim() })
-    .then(function(res) {
-      btn.disabled = false; btn.textContent = '+ Add to list';
-      if (!(res && res.success)) {
-        showErrorPanel('Couldn\'t add ' + part, [(res && res.error) || 'Unknown error from server']);
-        return;
-      }
-      input.value = ''; note.value = '';
-      document.getElementById('partSuggest').innerHTML = '';
-      _partSuggestions = [];
-      showToast(part + ' added to missing parts', 'success');
-      loadParts();
-    })
-    .catch(function(err) {
-      btn.disabled = false; btn.textContent = '+ Add to list';
-      showErrorPanel('Couldn\'t add ' + part, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
-    });
-}
-
-function removeNeededPart(idx) {
-  var n = ((_partsData && _partsData.needed) || [])[idx];
-  if (!n) return;
-  if (!confirm('Take ' + n.part + ' off the missing parts list?')) return;
-  apiFetch('removeNeededPart', { part: n.part })
-    .then(function(res) {
-      if (!(res && res.success)) {
-        showErrorPanel('Couldn\'t remove ' + n.part, [(res && res.error) || 'Unknown error from server']);
-        return;
-      }
-      showToast(n.part + ' removed', 'success');
-      loadParts();
-    })
-    .catch(function(err) {
-      showErrorPanel('Couldn\'t remove ' + n.part, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
-    });
-}
-
-function showWaitingInOOR() {
-  _oorFilter = 'waiting';
-  if (_oorShowArchived) toggleArchiveView();
-  switchTab('oor');
-}
-
-function renderParts() {
-  var d       = _partsData || {};
-  var needed  = (d.needed || []).map(function(n, i) { n._i = i; return n; });
-  var summary = document.getElementById('partsSummary');
-  var list    = document.getElementById('partsList');
-
-  var open    = d.openOrderCount || 0;
-  var blocked = d.blockedOrderCount || 0;
-  summary.innerHTML =
-    '<div class="parts-summary">' +
-      '<div class="parts-stat"><div class="parts-stat-num">' + needed.length + '</div><div class="parts-stat-label">part' + (needed.length === 1 ? '' : 's') + ' missing</div></div>' +
-      '<div class="parts-stat' + (blocked ? ' parts-stat-bad' : '') + '"><div class="parts-stat-num">' + blocked + '</div><div class="parts-stat-label">order' + (blocked === 1 ? '' : 's') + ' waiting</div></div>' +
-      '<div class="parts-stat parts-stat-good"><div class="parts-stat-num">' + Math.max(open - blocked, 0) + '</div><div class="parts-stat-label">ready to pick</div></div>' +
-    '</div>' +
-    (blocked ? '<button class="parts-oor-link" onclick="showWaitingInOOR()">See waiting orders in OOR →</button>' : '');
-
-  if (!needed.length) {
-    list.innerHTML = '<div class="empty-state"><div class="empty-icon">✓</div><p>Nothing on the missing parts list.</p></div>';
-    return;
-  }
-
-  // Parts holding up the most orders first, then the earliest promise date
-  needed.sort(function(a, b) {
-    var d1 = (b.orders || []).length - (a.orders || []).length;
-    if (d1) return d1;
-    var pa = (a.orders[0] || {}).promiseDate || '9999', pb = (b.orders[0] || {}).promiseDate || '9999';
-    return pa < pb ? -1 : pa > pb ? 1 : 0;
-  });
-
-  list.innerHTML = '<div class="section-label" style="margin-top:4px">On the list</div>' + needed.map(function(n) {
-    var orders = n.orders || [];
-    var ordersHtml = orders.length
-      ? '<div class="need-orders-label">Holding up ' + orders.length + ' order line' + (orders.length === 1 ? '' : 's') + '</div>' +
-        orders.map(function(o) {
-          return '<div class="need-order">' +
-            '<div class="need-order-main"><strong>#' + escHtml(o.orderNo) + '</strong> &nbsp;·&nbsp; ' + escHtml(o.location || '—') +
-              '<div class="need-order-code">' + escHtml(o.itemCode) + '</div></div>' +
-            '<div class="need-order-side">' + escHtml(o.qtyOrdered) + ' ' + escHtml(o.uom || '') +
-              '<div class="need-order-date">Promise ' + fmtDate(o.promiseDate) + '</div></div>' +
-          '</div>';
-        }).join('')
-      : '<div class="need-none">No open orders need this right now</div>';
-
-    return '<div class="need-card' + (orders.length ? ' need-card-bad' : '') + '">' +
-      '<div class="need-top">' +
-        '<div class="need-code">' + escHtml(n.part) + '</div>' +
-        '<button class="need-remove" onclick="removeNeededPart(' + n._i + ')" aria-label="Remove">✕</button>' +
-      '</div>' +
-      '<div class="need-meta">Added ' + escHtml(n.date || '—') + (n.note ? ' &nbsp;·&nbsp; ' + escHtml(n.note) : '') + '</div>' +
-      ordersHtml +
-    '</div>';
-  }).join('');
-}
-
-
-// ── Error panel ───────────────────────────────────────────
-// Red panel pinned to the bottom listing everything that blocked a save.
-// Stays up until ✕, a successful save, or leaving the screen.
-
-function showErrorPanel(title, problems) {
-  var el = document.getElementById('errorPanel');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'errorPanel';
-    el.className = 'error-panel';
-    el.setAttribute('role', 'alert');
-    document.body.appendChild(el);
-  }
-  problems = (problems || []).filter(Boolean);
-  el.innerHTML =
-    '<button class="error-panel-close" onclick="hideErrorPanel()" aria-label="Dismiss">✕</button>' +
-    '<div class="error-panel-title">⚠ ' + escHtml(title) + '</div>' +
-    (problems.length
-      ? '<ul class="error-panel-list">' + problems.map(function(p) { return '<li>' + escHtml(p) + '</li>'; }).join('') + '</ul>'
-      : '');
-  el.classList.add('show');
-  // Room at the bottom so the panel never hides the last buttons,
-  // and toasts pop up above it instead of on top of it
-  document.body.style.paddingBottom = (el.offsetHeight + 32) + 'px';
-  document.body.style.setProperty('--err-h', (el.offsetHeight + 12) + 'px');
-  playBadBeep();
-}
-
-function hideErrorPanel() {
-  var el = document.getElementById('errorPanel');
-  if (el) el.classList.remove('show');
-  document.body.style.paddingBottom = '';
-  document.body.style.removeProperty('--err-h');
-}
-
-// ── Init ──────────────────────────────────────────────────
-
-initPasscode();
-if (FEATURE_PARTS) { var _pt = document.getElementById('tab-parts'); if (_pt) _pt.hidden = false; }
-loadOrders();// ── Config ────────────────────────────────────────────────
-var API = 'https://artek-proxy.parkwall12.workers.dev';
-
-var _oorData         = [];
-var _scanData        = [];
-var _packageData     = [];
-var _archiveData     = [];
-var _oorShowArchived = false;
-var _scanTargetId    = null;
-var _partScanIdx     = null;
-var _partScanCode    = null;
-var _codeReader      = null;
-var _oorItemCache    = {};
-var _currentPickData = null;
-var _currentPkgData  = null;
-var _pkgBoxes        = [];
-var _sessionPicks    = [];
-var _pkgReturnTab    = null;
-var _entryMethod     = {};
-var _oorFilter       = 'all';
-var _sessionPhotos   = {};   // "order|box|part" → base64, covers Drive thumbnail lag
-var _pickMode        = 'new';    // 'new' | 'resume' (draft) | 'edit' (already picked)
-var _pickReturn      = 'lookup'; // where Back/Save goes: 'lookup' or 'detail'
-// Missing-parts tab is on hold. Flip to true to bring back the Parts tab
-// and the "Missing part" flags on the OOR tab.
-var FEATURE_PARTS    = false;
-var _partsData       = null;     // { needed, catalog, openOrderCount, blockedOrderCount }
-var _partSuggestions = [];
-
-// ── Passcode gate ─────────────────────────────────────────
-var PASSCODE = '3311';
-
-function todayStamp() { return new Date().toISOString().split('T')[0]; }
-
-function isUnlocked() {
-  try { return localStorage.getItem('artek_unlocked') === todayStamp(); }
-  catch(e) { return false; }
-}
-
-function checkPasscode() {
-  var val = document.getElementById('passcodeInput').value.trim();
-  var err = document.getElementById('passcodeError');
-  if (val === PASSCODE) {
-    try { localStorage.setItem('artek_unlocked', todayStamp()); } catch(e) {}
-    document.getElementById('passcodeOverlay').classList.add('hidden');
-    err.textContent = '';
-  } else {
-    err.textContent = 'Incorrect passcode';
-    document.getElementById('passcodeInput').value = '';
-    document.getElementById('passcodeInput').focus();
-  }
-}
-
-function initPasscode() {
-  if (isUnlocked()) {
-    document.getElementById('passcodeOverlay').classList.add('hidden');
-  } else {
-    setTimeout(function() {
-      var inp = document.getElementById('passcodeInput');
-      if (inp) inp.focus();
-    }, 200);
-  }
-}
-
-// ── Status helper ─────────────────────────────────────────
-function isDoneStatus(s) { return s === 'Complete' || s === 'Archived'; }
-
-// ── Fetch ─────────────────────────────────────────────────
-
-function apiFetch(action, payload, extra) {
-  var url = API + '?action=' + encodeURIComponent(action);
-  if (payload) url += '&payload=' + encodeURIComponent(JSON.stringify(payload));
-  if (extra)   url += extra;
-  return fetch(url).then(function(r) { return r.json(); });
-}
-
-function apiFetchPost(body) {
-  return fetch(API, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  }).then(function(r) { return r.json(); });
-}
-
-// ── Sound ─────────────────────────────────────────────────
-
-function playGoodBeep() {
-  try {
-    var ctx = new (window.AudioContext || window.webkitAudioContext)();
-    [880, 1100].forEach(function(freq, i) {
-      var osc = ctx.createOscillator(); var gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.type = 'sine'; osc.frequency.value = freq;
-      var t = ctx.currentTime + i * 0.15;
-      gain.gain.setValueAtTime(0.35, t);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.13);
-      osc.start(t); osc.stop(t + 0.13);
-    });
-  } catch(e) {}
-}
-
-function playBadBeep() {
-  try {
-    var ctx = new (window.AudioContext || window.webkitAudioContext)();
-    var osc = ctx.createOscillator(); var gain = ctx.createGain();
-    osc.connect(gain); gain.connect(ctx.destination);
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(300, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(80, ctx.currentTime + 0.5);
-    gain.gain.setValueAtTime(0.4, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
-    osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.5);
-  } catch(e) {}
-}
-
-// ── Code helpers ──────────────────────────────────────────
-
-function extractPartCode(itemCode) {
-  return (itemCode || '').trim().split(/\s{2,}/)[0].trim();
-}
-
-function extractMiddleCode(code) {
-  var parts = (code || '').trim().split('-');
-  return parts.length >= 2 ? parts[1].trim().toUpperCase() : (code || '').trim().toUpperCase();
-}
-// The number after the last dash is the cut length (-12, -24).
-// Returns null when the code has no length segment.
-function trailingLength(code) {
-  var parts = String(code || '').trim().split('-');
-  if (parts.length < 3) return null;
-  var last = parts[parts.length - 1].trim();
-  return /^\d+(\.\d+)?$/.test(last) ? Number(last) : null;
-}
-
-// Last "x NN.NN" in a description is the length:
-// "Flat Bar 0.375 x 12.00 x 12.00" -> 12
-function lengthFromDescription(desc) {
-  var all = String(desc || '').match(/x\s*(\d+(?:\.\d+)?)/gi);
-  if (!all || !all.length) return null;
-  var last = all[all.length - 1].match(/(\d+(?:\.\d+)?)/);
-  return last ? Number(last[1]) : null;
-}
-// Returns null when the scan is good, otherwise a human-readable reason.
-function matchProblem(expectedCode, scannedCode, expectedDesc) {
-  var a = extractMiddleCode(expectedCode);
-  var b = extractMiddleCode(scannedCode);
-  if (!a || !b) return 'Wrong part';
-
-  var midOk = (a === b) ||
-              (a.length >= 4 && b.length >= 4 && (b.indexOf(a) === 0 || a.indexOf(b) === 0));
-  if (!midOk) return 'Wrong part — expected ' + a + ' · got ' + b;
-
-  // Length only matters for fabricated (FP) parts
-  var isFP = String(expectedCode || '').trim().toUpperCase().indexOf('FP-') === 0;
-  if (!isFP) return null;
-
-  var scannedLen = trailingLength(scannedCode);
-  if (scannedLen === null) return null;
-
-  var expectedLen = trailingLength(expectedCode);
-  if (expectedLen === null) expectedLen = lengthFromDescription(expectedDesc);
-  if (expectedLen === null) return null;
-
-  if (Math.abs(expectedLen - scannedLen) < 0.01) return null;
-
-  return (scannedLen > expectedLen ? 'Too long' : 'Too short') +
-         ' — need ' + expectedLen + '", scanned ' + scannedLen + '"';
-}
-
-function codesMatch(expectedCode, scannedCode, expectedDesc) {
-  return matchProblem(expectedCode, scannedCode, expectedDesc) === null;
-}
-
-function normalizeOrderNo(v) {
-  var s = String(v || '').trim();
-  if (/^0+\d+$/.test(s)) s = s.replace(/^0+/, '');
-  return s;
-}
-// "10/13/2026 7:42 AM" -> "Oct 13, 2026 at 7:42 AM"; date-only -> "Oct 13, 2026"
-function fmtStamp(v) {
-  var s = String(v || '').trim();
-  if (!s) return '';
-  var m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[,\s]+(.+))?$/);
-  if (!m) return s;
-  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  var date = months[Number(m[1]) - 1] + ' ' + Number(m[2]) + ', ' + m[3];
-  return m[4] ? date + ' at ' + m[4].trim() : date;
-}
-
-// Render YYYY-MM-DD without timezone shifting
-function fmtDate(ymd) {
-  if (!ymd) return '—';
-  var p = String(ymd).split('-');
-  if (p.length !== 3) return String(ymd);
-  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  return months[Number(p[1]) - 1] + ' ' + Number(p[2]) + ', ' + p[0];
-}
-
-function escHtml(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
-    return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
-  });
-}
-
-// ── Tab routing ───────────────────────────────────────────
-
-function switchTab(tab) {
-  if (tab === 'parts' && !FEATURE_PARTS) return;
-  hideErrorPanel();
-  document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
-  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-  document.getElementById('tab-' + tab).classList.add('active');
-  document.getElementById('page-' + tab).classList.add('active');
-  if (tab === 'scan')    loadOrders();
-  if (tab === 'oor')     loadOOR();
-  if (tab === 'package') loadPackageOrders();
-  if (tab === 'parts')   loadParts();
-}
-// ── Scanner ───────────────────────────────────────────────
-function openScanner(targetInputId) {
-  _scanTargetId = targetInputId;
-  _partScanIdx  = null;
-  _partScanCode = null;
-  var label = targetInputId === 'orderNumber' ? 'Order number' :
-              targetInputId.startsWith('pick-lot-') ? 'Lot number' : 'Part number';
-  _startScanner('Scanning: ' + label);
-}
-
-function openPartScanner(idx, expectedCode) {
-  _partScanIdx  = idx;
-  _partScanCode = expectedCode;
-  _scanTargetId = null;
-  _startScanner('Scanning: Part ' + (idx + 1));
-}
-
-function _startScanner(label) {
-  document.getElementById('scannerFieldLabel').textContent = label;
-  document.getElementById('scannerStatus').textContent = 'Starting camera…';
-  document.getElementById('scannerStatus').className = 'scanner-status';
-  document.getElementById('scannerOverlay').classList.add('active');
-  if (_codeReader) { try { _codeReader.reset(); } catch(e) {} _codeReader = null; }
-
-  setTimeout(function() {
-    try {
-      // Only try the 1D formats our part labels use — skips ~15 other decoders
-      var hints = new Map();
-      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-      hints.set(ZXing.DecodeHintType.ALLOWED_LENGTHS, [4,5,6,7,8,9,10,11,12,13,14]);
-      _codeReader = new ZXing.BrowserMultiFormatReader(hints, 120);
-
-      _codeReader.decodeFromConstraints(
-        {
-          video: {
-            facingMode: { ideal: 'environment' },
-            width:  { ideal: 1920 },
-            height: { ideal: 1080 }
-          }
-        },
-        document.getElementById('scannerVideo'),
-        function(result, err) {
-          if (result) {
-            var code = result.getText();
-            document.getElementById('scannerStatus').textContent = 'Got it: ' + code;
-            document.getElementById('scannerStatus').className = 'scanner-status success';
-            if (_partScanIdx !== null) {
-              setTimeout(function() { closeScanner(); verifyPartScan(_partScanIdx, _partScanCode, code, true); }, 500);
-            } else if (_scanTargetId) {
-              var input = document.getElementById(_scanTargetId);
-              if (input) { input.value = code; input.dispatchEvent(new Event('input')); }
-              showToast('Scanned: ' + code, 'success');
-              setTimeout(function() {
-                closeScanner();
-                if (_scanTargetId === 'orderNumber') setTimeout(lookupOrder, 300);
-              }, 500);
-            }
-          }
-          if (err && !(err instanceof ZXing.NotFoundException)) console.warn(err);
-        }
-      );
-      document.getElementById('scannerStatus').textContent = 'Point camera at barcode…';
-
-      // iPhone captures very wide — zoom in so thin bars span more pixels
-      setTimeout(function() {
-        try {
-          var vid = document.getElementById('scannerVideo');
-          var track = vid && vid.srcObject && vid.srcObject.getVideoTracks()[0];
-          if (!track) return;
-          var caps = track.getCapabilities ? track.getCapabilities() : {};
-          var adv = [];
-          if (caps.zoom) {
-            var z = Math.min(caps.zoom.max, Math.max(caps.zoom.min || 1, 2));
-            adv.push({ zoom: z });
-            console.log('zoom set to', z, 'range', caps.zoom.min, '-', caps.zoom.max);
-          } else {
-            console.log('zoom not supported on this camera');
-          }
-          if (caps.focusMode && caps.focusMode.indexOf('continuous') !== -1) {
-            adv.push({ focusMode: 'continuous' });
-          }
-          if (adv.length) track.applyConstraints({ advanced: adv });
-        } catch(e) { console.log('camera tune failed:', e.message); }
-      }, 800);
-    } catch(e) {
-      document.getElementById('scannerStatus').textContent = 'Camera error: ' + e.message;
-      document.getElementById('scannerStatus').className = 'scanner-status error';
-    }
-  }, 300);
-}
-function closeScanner() {
-  if (_codeReader) { try { _codeReader.reset(); } catch(e) {} _codeReader = null; }
-  document.getElementById('scannerOverlay').classList.remove('active');
-  _scanTargetId = null;
-}
-
-// ── Part verification ─────────────────────────────────────
-
-// silent = true paints the saved result on an edit screen without beeps,
-// toasts or touching how the code was originally entered
-function verifyPartScan(idx, expectedCode, scannedCode, viaScanner, silent) {
-  scannedCode = String(scannedCode || '').trim();
-
-  var card     = document.getElementById('pick-card-' + idx);
-  var input    = document.getElementById('pick-scan-' + idx);
-  var status   = document.getElementById('pick-status-' + idx);
-  var qtyInput = document.getElementById('pick-qty-' + idx);
-
-  if (card) card.classList.remove('match', 'no-match', 'needs-fix');
-
-  // Field cleared — back to a blank, unverified state
-  if (!scannedCode) {
-    delete _entryMethod[idx];
-    if (input)  { input.value = ''; input.className = ''; }
-    if (status) { status.textContent = ''; status.className = 'pick-status'; }
-    return;
-  }
-
-  if (!silent) _entryMethod[idx] = viaScanner ? 'Scanned' : 'Typed in';
-
-  var _it     = ((_currentPickData && _currentPickData.items) || [])[idx];
-  var desc    = _it ? _it.description : '';
-  var problem = matchProblem(expectedCode, scannedCode, desc);
-  var isMatch = (problem === null);
-
-  if (input) { input.value = scannedCode; input.className = isMatch ? 'input-match' : 'input-no-match'; }
-  if (card)  card.classList.add(isMatch ? 'match' : 'no-match');
-  if (status) {
-    status.textContent = isMatch ? '✓ Match — ' + extractMiddleCode(expectedCode) + ' verified' : '✗ ' + problem;
-    status.className   = 'pick-status ' + (isMatch ? 'match' : 'no-match');
-  }
-  if (silent) return;
-
-  if (isMatch) {
-    playGoodBeep(); showToast('✓ Part matched!', 'success');
-    if (qtyInput) setTimeout(function() { qtyInput.focus(); }, 100);
-  } else {
-    playBadBeep();
-    showToast('✗ ' + problem.split(' — ')[0] + '!', 'error');
-  }
-}
-// ── Scan Orders list ──────────────────────────────────────
-
-function loadOrders() {
-  document.getElementById('orderList').innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
-  apiFetch('getScanOrders')
-    .then(function(data) { _scanData = Array.isArray(data) ? data : []; filterScanOrders(); })
-    .catch(function() { showToast('Error loading orders', 'error'); });
-}
-
-function filterScanOrders() {
-  var q = document.getElementById('scanSearch') ? document.getElementById('scanSearch').value.toLowerCase().trim() : '';
-  renderOrders(_scanData.filter(function(o) { return !q || String(o.orderNumber).toLowerCase().indexOf(q) !== -1; }));
-}
-
-function renderOrders(orders) {
-  var list = document.getElementById('orderList');
-  if (!orders || !orders.length) {
-    list.innerHTML = '<div class="empty-state"><div class="empty-icon">📋</div><p>No orders yet. Tap + to start a pick.</p></div>';
-    return;
-  }
-  list.innerHTML = orders.map(function(o) {
-    var date  = o.timestamp || '—';
-    var badge = o.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>' :
-                o.status === 'Packaging' ? '<span class="badge badge-inprog">Packaging</span>'  :
-                o.status === 'Picking'   ? '<span class="badge badge-draft">Draft</span>'       :
-                '<span class="badge badge-ready">Picked</span>';
-    return '<div class="order-card" onclick="openOrderDetail(\'' + o.orderNumber + '\')">' +
-      '<div class="order-icon">📋</div>' +
-      '<div class="order-info">' +
-        '<div class="order-num">Order #' + o.orderNumber + '</div>' +
-        '<div class="order-meta">' + date + (o.location ? ' &nbsp;·&nbsp; ' + o.location : '') + '</div>' +
-        (o.po ? '<div class="order-meta">PO: ' + o.po + '</div>' : '') +
-      '</div>' + badge +
-    '</div>';
-  }).join('');
-}
-
-// ── Order detail (read-only view) ─────────────────────────
-
-function openOrderDetail(orderNo) {
-  hideErrorPanel();
-  _pkgReturnTab = document.querySelector('.tab-btn.active') ? document.querySelector('.tab-btn.active').id.replace('tab-','') : 'scan';
-  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-  document.getElementById('page-order-detail').classList.add('active');
-  document.getElementById('detailContent').innerHTML = '<p style="color:#94a3b8;text-align:center;padding:40px">Loading…</p>';
-
-  Promise.all([
-    apiFetch('getPackageOrder', { orderNo: String(orderNo) }),
-    apiFetch('getBoxPhotos',    { orderNo: String(orderNo) })
-  ]).then(function(results) {
-    var data   = results[0];
-    var photos = results[1];
-    if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
-    renderOrderDetail(data, Array.isArray(photos) ? photos : []);
-  }).catch(function() { showToast('Error loading order', 'error'); });
-}
-
-function renderOrderDetail(data, photos) {
-  var h     = data.header;
-  var items = data.items || [];
-  var boxes = data.boxes || {};
-  photos    = photos || [];
-
-  var photoLookup = {};
-  photos.forEach(function(p) { photoLookup[p.boxIdx + '|' + p.partCode] = p.photoData; });
-
-  var statusBadge = h.status === 'Complete'  ? '<span class="badge badge-complete">Complete</span>' :
-                    h.status === 'Archived'  ? '<span class="badge badge-complete">Archived</span>' :
-                    h.status === 'Packaging' ? '<span class="badge badge-inprog">Packaging</span>'  :
-                    h.status === 'Picking'   ? '<span class="badge badge-draft">Draft</span>'       :
-                    '<span class="badge badge-ready">Picked</span>';
-
-  var bodyHtml = '';
-
-  if (items.length === 0) {
-    bodyHtml = '<p style="color:#94a3b8;font-size:.85rem;padding:8px 0">No items found.</p>';
-  } else {
-    items.forEach(function(item) {
-      var itemBoxes = (boxes[item.itemCode] || []).slice().sort(function(a,b) { return a.boxIndex - b.boxIndex; });
-
-      var boxesHtml = '';
-      itemBoxes.forEach(function(box) {
-        var sessionKey = h.orderNumber + '|' + box.boxIndex + '|' + item.itemCode;
-        var url = _sessionPhotos[sessionKey] || photoLookup[box.boxIndex + '|' + item.itemCode];
-        boxesHtml += '<div class="detail-box-row">' +
-          '<div class="detail-box-row-info">' +
-            '<div class="detail-box-row-title">Box ' + box.boxIndex + '</div>' +
-            '<div class="detail-box-row-meta">' + box.qtyInBox + ' ' + (item.uom||'ft') + ' &nbsp;·&nbsp; ' + box.weight + ' lbs</div>' +
-          '</div>' +
-          (url ? '<img src="' + url + '" class="detail-box-row-photo" onclick="openPhotoLightbox(this.src)"/>' : '') +
-        '</div>';
-      });
-
-      bodyHtml += '<div class="detail-part-entry">' +
-        '<div class="detail-item-code">' + item.itemCode + '</div>' +
-        (item.description ? '<div class="detail-item-desc">' + item.description + '</div>' : '') +
-        '<div class="detail-item-row"><span>Lot #</span><strong>' + (item.lotNumber || '—') + '</strong></div>' +
-        '<div class="detail-item-row"><span>Pieces pulled</span><strong>' + item.qtyPulled + ' pcs</strong></div>' +
-        boxesHtml +
-      '</div>';
-    });
-  }
-
-  var actionHtml = '';
-  if (h.status === 'Archived') {
-    actionHtml = '<button class="reprint-btn" style="margin-top:12px" onclick="reprintPDF(\'' + h.orderNumber + '\')">🖨 Print tags</button>';
-  } else if (h.status === 'Complete') {
-    actionHtml = '<div class="oor-action-row" style="padding:0;margin-top:12px">' +
-        '<button class="oor-action-btn" onclick="reprintPDF(\'' + h.orderNumber + '\')">🖨 Print tags</button>' +
-        '<button class="oor-action-btn oor-action-btn-view" onclick="openPackageOrder(\'' + h.orderNumber + '\')">✎ Edit boxes</button>' +
-      '</div>' +
-      '<button class="btn-exit" style="width:100%;margin-top:8px" onclick="openEditPick(\'' + h.orderNumber + '\')">✎ Edit pulled quantities</button>';
-  } else if (h.status === 'Picking') {
-    actionHtml = '<button class="btn-save" style="width:100%;margin-top:12px" onclick="openEditPick(\'' + h.orderNumber + '\')">Continue pick →</button>';
-  } else {
-    actionHtml = '<button class="btn-save" style="width:100%;margin-top:12px" onclick="openPackageOrder(\'' + h.orderNumber + '\')">Open in Packaging →</button>' +
-      '<button class="btn-exit" style="width:100%;margin-top:8px" onclick="openEditPick(\'' + h.orderNumber + '\')">✎ Edit pulled quantities</button>';
-  }
-
-  document.getElementById('detailContent').innerHTML =
-    '<div class="pick-order-header">' +
-      '<div class="pick-order-num">Order #' + h.orderNumber + ' &nbsp;' + statusBadge + '</div>' +
-      '<div class="pick-order-meta">' +
-        '<span class="pick-order-po">PO: ' + (h.po||'—') + '</span>' +
-        ' &nbsp;·&nbsp; ' + (h.location||'—') +
-      '</div>' +
-    '</div>' +
-    '<div class="detail-box-section">' + bodyHtml + '</div>' +
-    actionHtml;
-}
-// ── Edit / continue a saved pick ──────────────────────────
-// Opens the same pick screen used for a new pick, pre-filled with what
-// was saved, so parts can be re-verified and the scanners still work.
-
-function openEditPick(orderNo) {
-  var fromDetail = document.getElementById('page-order-detail').classList.contains('active');
-  if (fromDetail) {
-    document.getElementById('detailContent').innerHTML = '<p style="color:#94a3b8;text-align:center;padding:40px">Loading…</p>';
-  }
-  apiFetch('getPackageOrder', { orderNo: String(orderNo) })
-    .then(function(d) {
-      if (d.error) {
-        showErrorPanel('Couldn\'t open order #' + orderNo, [d.error]);
-        if (fromDetail) openOrderDetail(orderNo);
-        return;
-      }
-      var h = d.header;
-      if (h.status === 'Archived') {
-        showErrorPanel('Order #' + orderNo + ' is archived', ['Shipped orders can\'t be edited.']);
-        if (fromDetail) openOrderDetail(orderNo);
-        return;
-      }
-      var data = {
-        header: { orderNo: h.orderNumber, po: h.po || '', location: h.location || '',
-                  promiseDate: h.promiseDate || '', status: h.status || '' },
-        items: (d.items || []).map(function(it) {
-          return {
-            itemCode:    it.itemCode,
-            description: it.description || '',
-            uom:         it.uom || '',
-            qtyOrdered:  it.qtyRequired,
-            saved: { scannedCode: it.scannedCode || '', entry: it.entry || '',
-                     lotNumber: it.lotNumber || '', qtyPulled: it.qtyPulled || 0 }
-          };
-        })
-      };
-      showPickPhase(data, h.status === 'Picking' ? 'resume' : 'edit', fromDetail ? 'detail' : 'lookup');
-    })
-    .catch(function(err) {
-      showErrorPanel('Couldn\'t open order #' + orderNo, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
-      if (fromDetail) openOrderDetail(orderNo);
-    });
-}
-
-function saveEditPick() {
-  if (!_currentPickData) return;
-  var h    = _currentPickData.header;
-  var rows = collectPickRows();
-
-  var problems = pickProblems(rows);
-  if (problems.length) {
-    showErrorPanel('Can\'t save changes to order #' + h.orderNo + ' — fix ' + (problems.length === 1 ? 'this' : 'these') + ' first:', problems);
-    scrollToFirstFix();
-    return;
-  }
-  hideErrorPanel();
-
-  var items = rows.map(function(r) {
-    return { itemCode: r.expectedCode, scannedCode: r.scannedCode, lotNumber: r.lotNumber,
-             qtyPulled: r.qtyPulled, match: r.match, entry: r.entry };
-  });
-
-  setPickButtonsBusy(true, 'savePickBtn');
-  apiFetch('updatePullQty', { orderNumber: String(h.orderNo), finish: true, items: items })
-    .then(function(res) {
-      setPickButtonsBusy(false);
-      if (res && res.success) {
-        showToast('Order #' + h.orderNo + ' pick updated', 'success');
-        leavePick();
-      } else {
-        showErrorPanel('Couldn\'t save order #' + h.orderNo, [(res && res.error) || 'Unknown error from server']);
-      }
-    })
-    .catch(function(err) {
-      setPickButtonsBusy(false);
-      showErrorPanel('Couldn\'t save order #' + h.orderNo, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
-    });
-}
-
-function exitOrderDetail() {
-  hideErrorPanel();
-  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-  var returnTab = _pkgReturnTab || 'scan';
-  document.getElementById('tab-' + returnTab).classList.add('active');
-  document.getElementById('page-' + returnTab).classList.add('active');
-  if (returnTab === 'scan')     loadOrders();
-  else if (returnTab === 'oor') loadOOR();
-  else                          loadPackageOrders();
-  _pkgReturnTab = null;
-}
-
-// ── Order lookup ──────────────────────────────────────────
-
-function showNewOrder() {
-  hideErrorPanel();
-  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-  document.getElementById('page-new-order').classList.add('active');
-  document.getElementById('phase-lookup').style.display = 'block';
-  document.getElementById('phase-pick').style.display   = 'none';
-  document.getElementById('orderNumber').value = '';
-  document.getElementById('lookupError').style.display  = 'none';
-  _currentPickData = null;
-  renderSessionPicks();
-  setTimeout(function() { document.getElementById('orderNumber').focus(); }, 100);
-}
-
-function renderSessionPicks() {
-  var wrap = document.getElementById('sessionPicksWrap');
-  var list = document.getElementById('sessionPicksList');
-  if (!_sessionPicks.length) { wrap.style.display = 'none'; return; }
-  wrap.style.display = 'block';
-  list.innerHTML = _sessionPicks.map(function(p) {
-    return '<div class="session-pick-card">' +
-      '<div class="session-pick-icon">✓</div>' +
-      '<div class="session-pick-info">' +
-        '<div class="session-pick-num">Order #' + p.orderNumber + '</div>' +
-        '<div class="session-pick-meta">' + (p.location||'') + (p.po ? ' &nbsp;·&nbsp; PO: ' + p.po : '') + ' &nbsp;·&nbsp; ' + p.itemCount + ' item' + (p.itemCount !== 1 ? 's' : '') + '</div>' +
-      '</div>' +
-      (p.draft ? '<span class="badge badge-draft">Draft</span>' : '<span class="badge badge-ok">Picked</span>') +
-    '</div>';
-  }).join('');
-}
-
-function lookupOrder() {
-  var num = normalizeOrderNo(document.getElementById('orderNumber').value);
-  var errBox = document.getElementById('lookupError');
-
-  if (!num) {
-    errBox.textContent = 'Please enter an order number.';
-    errBox.style.display = 'block';
-    return;
-  }
-  errBox.style.display = 'none';
-
-  var btn = document.getElementById('lookupBtn');
-  btn.disabled = true; btn.textContent = 'Looking up…';
-
-  apiFetch('getFullOOROrder', { orderNo: num })
-    .then(function(data) {
-      btn.disabled = false; btn.textContent = 'Look up order';
-
-      if (data && data.error) {
-        errBox.textContent = data.error;
-        errBox.style.display = 'block';
-        return;
-      }
-
-      // Already in the system — open its record instead of a blank pick
-      var ex = data.header && data.header.existingStatus;
-      if (ex === 'Picking') {
-        showToast('Order #' + num + ' has a saved draft — picking up where you left off', 'info');
-        document.getElementById('orderNumber').value = '';
-        openEditPick(num);
-        return;
-      }
-      if (ex) {
-        var msg = ex === 'Archived'  ? 'Order #' + num + ' already shipped — opening record' :
-                  ex === 'Complete'  ? 'Order #' + num + ' is already complete — opening record' :
-                  ex === 'Packaging' ? 'Order #' + num + ' is already being packaged' :
-                                       'Order #' + num + ' has already been picked';
-        showToast(msg, 'info');
-        document.getElementById('orderNumber').value = '';
-        openOrderDetail(num);
-        return;
-      }
-
-      showPickPhase(data, 'new', 'lookup');
-    })
-    .catch(function() {
-      btn.disabled = false; btn.textContent = 'Look up order';
-      errBox.textContent = 'Error looking up order. Check connection.';
-      errBox.style.display = 'block';
-    });
-}
-// mode: 'new' (blank), 'resume' (saved draft), 'edit' (already picked)
-// returnTo: 'lookup' (order # screen) or 'detail' (order details page)
-function showPickPhase(data, mode, returnTo) {
-  _pickMode        = mode || 'new';
-  _pickReturn      = returnTo || 'lookup';
-  _currentPickData = data;
-  _entryMethod     = {};
-  hideErrorPanel();
-
-  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-  document.getElementById('page-new-order').classList.add('active');
-  document.getElementById('phase-lookup').style.display = 'none';
-  document.getElementById('phase-pick').style.display   = 'block';
-
-  var h      = data.header;
-  var isEdit = _pickMode === 'edit';
-  var meta   = ['<span class="pick-order-po">PO: ' + escHtml(h.po || '—') + '</span>', escHtml(h.location || '—')];
-  if (h.isPrepaid !== undefined) meta.push(h.isPrepaid ? 'Prepaid' : 'Collect');
-  meta.push('Promise: ' + fmtDate(h.promiseDate));
-
-  var tag = _pickMode === 'resume' ? ' &nbsp;<span class="badge badge-draft">Draft</span>' :
-            isEdit ? ' &nbsp;<span class="badge badge-ready">' + escHtml(h.status || 'Picked') + '</span>' : '';
-
-  document.getElementById('pickOrderHeader').innerHTML =
-    '<div class="pick-order-num">' + (isEdit ? 'Edit pull — ' : '') + 'Order #' + escHtml(h.orderNo) + tag + '</div>' +
-    '<div class="pick-order-meta">' + meta.join(' &nbsp;·&nbsp; ') + '</div>';
-
-  document.getElementById('pickItemsList').innerHTML = (data.items||[]).map(function(item, idx) {
-    var code     = extractPartCode(item.itemCode);
-    var safeCode = code.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    var s        = item.saved || {};
-    var qtyVal   = Number(s.qtyPulled) > 0 ? s.qtyPulled : '';
-
-    return '<div class="pick-item-card" id="pick-card-' + idx + '">' +
-      '<div class="pick-item-top">' +
-        '<div class="pick-item-code">' + escHtml(code) + '</div>' +
-        '<div class="pick-item-desc">' + escHtml(item.description || '') + '</div>' +
-        '<span class="pick-item-req">Required: ' + item.qtyOrdered + ' ' + escHtml(item.uom || '') + '</span>' +
-      '</div>' +
-
-      '<div class="pick-label">Part number</div>' +
-      '<div class="pick-scan-row">' +
-        '<input type="text" id="pick-scan-' + idx + '" placeholder="Scan or type part #" autocomplete="off" value="' + escHtml(s.scannedCode || '') + '" onchange="verifyPartScan(' + idx + ',\'' + safeCode + '\',this.value,false)"/>' +
-        '<button class="scan-btn" onclick="openPartScanner(' + idx + ',\'' + safeCode + '\')">&#9641;</button>' +
-      '</div>' +
-      '<div class="pick-status" id="pick-status-' + idx + '"></div>' +
-
-      '<div class="pick-label">Lot number</div>' +
-      '<div class="pick-scan-row">' +
-        '<input type="text" id="pick-lot-' + idx + '" placeholder="Scan or type lot #" autocomplete="off" value="' + escHtml(s.lotNumber || '') + '"/>' +
-        '<button class="scan-btn" onclick="openScanner(\'pick-lot-' + idx + '\')">&#9641;</button>' +
-        '<button class="autofill-btn" id="autofill-btn-' + idx + '" onclick="autofillLot(' + idx + ')" title="Autofill lot number">⟳</button>' +
-      '</div>' +
-
-      '<div class="pick-qty-row">' +
-        '<label>Pieces pulled</label>' +
-        '<input type="number" id="pick-qty-' + idx + '" placeholder="0" min="0" value="' + qtyVal + '"/>' +
-      '</div>' +
-    '</div>';
-  }).join('');
-
-  // Re-check saved scans so cards show green/red right away — no beeps
-  (data.items || []).forEach(function(item, idx) {
-    var s = item.saved || {};
-    if (!s.scannedCode) return;
-    _entryMethod[idx] = s.entry || 'Typed in';
-    verifyPartScan(idx, extractPartCode(item.itemCode), s.scannedCode, false, true);
-  });
-
-  var footer = document.querySelector('#phase-pick .footer-actions');
-  if (footer) {
-    footer.innerHTML = isEdit
-      ? '<button class="btn-exit" onclick="leavePick()">Cancel</button>' +
-        '<button class="btn-save" id="savePickBtn" onclick="saveEditPick()">Save changes</button>'
-      : '<button class="btn-exit" onclick="leavePick()">Back</button>' +
-        '<button class="btn-exit" id="savePickDraftBtn" onclick="savePick(true)">Save draft</button>' +
-        '<button class="btn-save" id="savePickBtn" onclick="savePick(false)">Save pick</button>';
-  }
-  window.scrollTo(0, 0);
-}
-
-function autofillLot(idx) {
-  if (!_currentPickData) return;
-  var item = (_currentPickData.items || [])[idx];
-  if (!item) return;
-  var btn = document.getElementById('autofill-btn-' + idx);
-  if (btn) { btn.disabled = true; btn.textContent = '…'; }
-  apiFetch('getLotNumber', { partCode: extractPartCode(item.itemCode) })
-    .then(function(res) {
-      if (btn) { btn.disabled = false; btn.textContent = '⟳'; }
-      if (res && res.lotNumber) {
-        var input = document.getElementById('pick-lot-' + idx);
-        if (input) input.value = res.lotNumber;
-        showToast('Lot # filled: ' + res.lotNumber, 'success');
-      } else if (res && res.error) {
-        showToast('Lot error: ' + res.error, 'error');
-      } else {
-        showToast('No lot number found for this part', 'error');
-      }
-    })
-    .catch(function() {
-      if (btn) { btn.disabled = false; btn.textContent = '⟳'; }
-      showToast('Error looking up lot number', 'error');
-    });
-}
-
-function backToLookup() {
-  hideErrorPanel();
-  _currentPickData = null;
-  document.getElementById('phase-lookup').style.display = 'block';
-  document.getElementById('phase-pick').style.display   = 'none';
-  document.getElementById('lookupError').style.display  = 'none';
-  document.getElementById('orderNumber').value = '';
-  renderSessionPicks();
-  setTimeout(function() { document.getElementById('orderNumber').focus(); }, 100);
-}
-
-// Back / Cancel / after a save — returns to wherever the pick was opened from
-function leavePick() {
-  var orderNo = _currentPickData && _currentPickData.header ? String(_currentPickData.header.orderNo) : '';
-  if (_pickReturn === 'detail' && orderNo) { _currentPickData = null; openOrderDetail(orderNo); }
-  else backToLookup();
-}
-
-// Reads every pick card on screen
-function collectPickRows() {
-  var items = (_currentPickData && _currentPickData.items) || [];
-  return items.map(function(item, idx) {
-    var expectedCode = extractPartCode(item.itemCode);
-    var scannedCode  = ((document.getElementById('pick-scan-' + idx) || {}).value || '').trim();
-    var lotNumber    = ((document.getElementById('pick-lot-'  + idx) || {}).value || '').trim();
-    var qtyRaw       = ((document.getElementById('pick-qty-'  + idx) || {}).value || '').trim();
-    var problem      = scannedCode ? matchProblem(expectedCode, scannedCode, item.description || '') : null;
-    return {
-      idx: idx, expectedCode: expectedCode, scannedCode: scannedCode,
-      lotNumber: lotNumber, qtyRaw: qtyRaw, qtyPulled: parseFloat(qtyRaw) || 0,
-      description: item.description || '', uom: item.uom || '', qtyRequired: item.qtyOrdered,
-      problem: problem, match: !!scannedCode && problem === null,
-      entry: scannedCode ? (_entryMethod[idx] || 'Typed in') : ''
-    };
-  });
-}
-
-// Everything that stops a pick from being finished, one line per part.
-// Also outlines those cards in red.
-function pickProblems(rows) {
+// Everything more than WT_ALERT_LBS off, in plain words, with the box to open
+function weightIssues() {
   var out = [];
-  rows.forEach(function(r) {
-    var card = document.getElementById('pick-card-' + r.idx);
-    if (card) card.classList.remove('needs-fix');
-
-    var issues = [];
-    if (!r.scannedCode)       issues.push('part not scanned');
-    else if (r.problem)       issues.push(r.problem);
-    if (!r.lotNumber)         issues.push('lot # missing');
-    if (!(r.qtyPulled > 0))   issues.push('pieces pulled missing');
-
-    if (issues.length) {
-      out.push(r.expectedCode + ': ' + issues.join(', '));
-      if (card) card.classList.add('needs-fix');
+  _pkgBoxes.forEach(function(box, bIdx) {
+    var w = boxWeights(bIdx), partFlagged = false;
+    w.rows.forEach(function(c) {
+      if (!c.off) return;
+      partFlagged = true;
+      out.push({ box: bIdx, text: c.code + ' — ' + (c.actual > 0
+        ? 'entered ' + fmtLbs(c.actual) + ' lbs, estimated ' + fmtLbs(c.expected) + ' lbs (' + fmtLbs(Math.abs(c.diff)) + ' lbs ' + (c.diff < 0 ? 'under' : 'over') + ')'
+        : 'no weight entered, estimated ' + fmtLbs(c.expected) + ' lbs') });
+    });
+    if (w.off && !partFlagged) {
+      out.push({ box: bIdx, text: 'Box total — ' + fmtLbs(w.actual) + ' lbs vs estimated ' + fmtLbs(w.est) + ' lbs (' +
+        fmtLbs(Math.abs(w.diff)) + ' lbs ' + (w.diff < 0 ? 'under' : 'over') + ')' });
     }
   });
   return out;
 }
 
-function scrollToFirstFix() {
-  var first = document.querySelector('.pick-item-card.needs-fix');
-  if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
-}
-
-function setPickButtonsBusy(busy, activeId) {
-  ['savePickBtn', 'savePickDraftBtn'].forEach(function(id) {
-    var b = document.getElementById(id);
-    if (!b) return;
-    if (!b.dataset.label) b.dataset.label = b.textContent;
-    b.disabled = busy;
-    b.textContent = (busy && id === activeId) ? 'Saving…' : b.dataset.label;
-  });
-}
-
-// isDraft = true  → "Save draft": needs at least one field, no other rules
-// isDraft = false → "Save pick":  every part scanned + matching, lot #, pieces pulled
-function savePick(isDraft) {
-  if (!_currentPickData) return;
-  isDraft  = isDraft === true;
-  var h    = _currentPickData.header;
-  var rows = collectPickRows();
-
-  if (isDraft) {
-    rows.forEach(function(r) {
-      var card = document.getElementById('pick-card-' + r.idx);
-      if (card) card.classList.remove('needs-fix');
-    });
-    var anything = rows.some(function(r) { return r.scannedCode || r.lotNumber || r.qtyRaw; });
-    if (!anything) {
-      showErrorPanel('Can\'t save a blank draft', ['Scan a part, enter a lot # or enter pieces pulled first.']);
-      return;
-    }
-  } else {
-    var problems = pickProblems(rows);
-    if (problems.length) {
-      showErrorPanel('Can\'t save pick for order #' + h.orderNo + ' — fix ' + (problems.length === 1 ? 'this' : 'these') + ' first:', problems);
-      scrollToFirstFix();
-      return;
-    }
-  }
-  hideErrorPanel();
-
-  var payload = {
-    orderNumber: String(h.orderNo),
-    po:          h.po || '',
-    location:    h.location || '',
-    promiseDate: h.promiseDate || '',
-    status:      isDraft ? 'Picking' : 'Picked',
-    items: rows.map(function(r) {
-      return { expectedCode: r.expectedCode, scannedCode: r.scannedCode, description: r.description,
-               uom: r.uom, lotNumber: r.lotNumber, qtyRequired: r.qtyRequired,
-               qtyPulled: r.qtyPulled, match: r.match, entry: r.entry };
-    })
-  };
-
-  setPickButtonsBusy(true, isDraft ? 'savePickDraftBtn' : 'savePickBtn');
-  apiFetch('saveScanOrder', payload)
-    .then(function(res) {
-      setPickButtonsBusy(false);
-      if (!(res && res.success)) {
-        showErrorPanel('Couldn\'t save order #' + h.orderNo, [(res && res.error) || 'Unknown error from server']);
-        return;
-      }
-      var no = String(h.orderNo);
-      _sessionPicks = _sessionPicks.filter(function(p) { return p.orderNumber !== no; });
-      _sessionPicks.unshift({ orderNumber: no, po: h.po || '', location: h.location || '',
-                              itemCount: rows.length, draft: isDraft });
-      showToast(isDraft ? 'Draft saved for order #' + no
-                        : 'Order #' + no + ' picked — ready to package', 'success');
-      leavePick();
-    })
-    .catch(function(err) {
-      setPickButtonsBusy(false);
-      showErrorPanel('Couldn\'t save order #' + h.orderNo, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
-    });
-}
-
-function exitForm() {
-  _sessionPicks = [];
-  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-  document.getElementById('tab-scan').classList.add('active');
-  document.getElementById('page-scan').classList.add('active');
-  loadOrders();
-}
-
-// ── Package Orders list ───────────────────────────────────
-
-function loadPackageOrders() {
-  document.getElementById('packageList').innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
-  apiFetch('getPackageOrders')
-    .then(function(data) { _packageData = Array.isArray(data) ? data : []; filterPackageOrders(); })
-    .catch(function() { showToast('Error loading package orders', 'error'); });
-}
-
-function filterPackageOrders() {
-  var q = document.getElementById('packageSearch') ? document.getElementById('packageSearch').value.toLowerCase().trim() : '';
-  renderPackageList(_packageData.filter(function(o) { return !q || String(o.orderNumber).toLowerCase().indexOf(q) !== -1; }));
-}
-
-function renderPackageList(orders) {
-  var list = document.getElementById('packageList');
-  if (!orders || !orders.length) {
-    list.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><p>No orders ready for packaging.<br>Complete a scan first.</p></div>';
-    return;
-  }
-  list.innerHTML = orders.map(function(o) {
-    var badge = o.status === 'Packaging' ? '<span class="badge badge-inprog">In progress</span>' : '<span class="badge badge-ready">Ready</span>';
-    return '<div class="order-card" onclick="openPackageOrder(\'' + o.orderNumber + '\')">' +
-      '<div class="order-icon">📦</div>' +
-      '<div class="order-info">' +
-        '<div class="order-num">Order #' + o.orderNumber + '</div>' +
-        '<div class="order-meta">' + (o.location||'—') + (o.po ? ' &nbsp;·&nbsp; PO: ' + o.po : '') + '</div>' +
-      '</div>' + badge +
+function showWeightReview(issues) {
+  var byBox = {};
+  issues.forEach(function(i) { (byBox[i.box] = byBox[i.box] || []).push(i.text); });
+  var list = Object.keys(byBox).map(function(b) {
+    return '<div style="margin-top:10px">' +
+      '<div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#64748b">Box ' + (Number(b) + 1) + '</div>' +
+      '<ul style="margin:4px 0 0;padding-left:18px;font-size:.88rem;line-height:1.45">' +
+        byBox[b].map(function(t) { return '<li style="margin-top:3px">' + escHtml(t) + '</li>'; }).join('') +
+      '</ul></div>';
+  }).join('');
+  var first = issues.length ? issues[0].box : 0;
+  var html = modalHeader('wtReviewTitle', 'Double-check the weights') +
+    '<p style="margin:0;font-size:.88rem;color:#475569;line-height:1.45">These are more than ' + WT_ALERT_LBS +
+      ' lbs off from Item Wts. Recount and re-weigh before shipping:</p>' + list +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:18px">' +
+      '<button type="button" onclick="closeModal(); goToBox(' + first + ')" style="flex:1 1 140px;height:44px;border-radius:8px;border:1px solid #cbd5e1;background:#ffffff;color:#1e293b;font:inherit;font-size:.9rem;font-weight:600;cursor:pointer">Go back and check</button>' +
+      '<button type="button" onclick="closeModal(); completeOrder(true)" style="flex:1 1 160px;height:44px;border-radius:8px;border:none;background:#10b981;color:#ffffff;font:inherit;font-size:.9rem;font-weight:700;cursor:pointer">✓ All clear — ready to ship</button>' +
     '</div>';
-  }).join('');
+  openModal(html, 'wtReviewTitle');
 }
 
-// ── Package order detail (edit mode) ──────────────────────
-
-function openPackageOrder(orderNo) {
-  hideErrorPanel();
-  _pkgReturnTab = document.querySelector('.tab-btn.active') ? document.querySelector('.tab-btn.active').id.replace('tab-','') : 'package';
-  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-  document.getElementById('page-package-detail').classList.add('active');
-  _pkgBoxes = [];
-  document.getElementById('pkgOrderHeader').innerHTML = '<div class="pick-order-header"><p style="color:#94a3b8">Loading…</p></div>';
-  document.getElementById('pkgItemsList').innerHTML = '';
-
-  Promise.all([
-    apiFetch('getPackageOrder', { orderNo: String(orderNo) }),
-    apiFetch('getBoxPhotos',    { orderNo: String(orderNo) })
-  ])
-    .then(function(results) {
-      var data   = results[0];
-      var photos = Array.isArray(results[1]) ? results[1] : [];
-      if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
-      _currentPkgData = data;
-
-      var photoLookup = {};
-      photos.forEach(function(p) { photoLookup[p.boxIdx + '|' + p.partCode] = p.photoData; });
-
-      var byBox = {};
-      Object.keys(data.boxes || {}).forEach(function(itemCode) {
-        (data.boxes[itemCode] || []).forEach(function(box) {
-          if (!byBox[box.boxIndex]) byBox[box.boxIndex] = [];
-          var sKey = String(orderNo) + '|' + box.boxIndex + '|' + itemCode;
-          byBox[box.boxIndex].push({
-            itemCode: itemCode,
-            qty:      box.qtyInBox || 0,
-            weight:   box.weight || 0,
-            photoUrl: _sessionPhotos[sKey] || photoLookup[box.boxIndex + '|' + itemCode] || null
-          });
-        });
-      });
-
-      var boxIdxs = Object.keys(byBox).map(Number).sort(function(a,b) { return a-b; });
-
-      if (boxIdxs.length > 0) {
-        _pkgBoxes = boxIdxs.map(function(bIdx) { return { parts: byBox[bIdx] }; });
-      } else {
-        _pkgBoxes = [{ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] }];
-      }
-
-      renderPackageDetail(data);
-    })
-    .catch(function(err) {
-      console.error('openPackageOrder error:', err);
-      showToast('Error loading order', 'error');
-    });
-}
-
-function renderPackageDetail(data) {
-  var h = data.header;
-  document.getElementById('pkgOrderHeader').innerHTML =
-    '<div class="pick-order-header">' +
-      '<div class="pick-order-num">Order #' + h.orderNumber + '</div>' +
-      '<div class="pick-order-meta">' +
-        '<span class="pick-order-po">PO: ' + (h.po||'—') + '</span>' +
-        ' &nbsp;·&nbsp; ' + (h.location||'—') +
-        ' &nbsp;·&nbsp; Status: ' + h.status +
-      '</div>' +
-    '</div>';
-  document.getElementById('pkgItemsList').innerHTML = '<div id="boxesList"></div>';
-  renderAllBoxes();
-}
-
-function renderAllBoxes() {
-  var container = document.getElementById('boxesList');
-  if (!container || !_currentPkgData) return;
-  var items = _currentPkgData.items || [];
-  container.innerHTML = _pkgBoxes.map(function(box, bIdx) {
-    return renderBoxSection(box, bIdx, items, bIdx === _pkgBoxes.length - 1);
-  }).join('');
-}
-
-function renderBoxSection(box, bIdx, items, isLast) {
-  var partsHtml = box.parts.map(function(part, pIdx) {
-    return renderPartEntry(bIdx, pIdx, part, items, box.parts.length > 1);
-  }).join('');
-  return '<div class="box-section" id="box-section-' + bIdx + '">' +
-    '<div class="box-section-header">' +
-      '<span class="box-section-title">Box ' + (bIdx + 1) + '</span>' +
-      (bIdx > 0 ? '<button class="delete-box-btn" onclick="deleteBox(' + bIdx + ')">✕ Remove box</button>' : '') +
-    '</div>' +
-    '<div id="box-' + bIdx + '-parts">' + partsHtml + '</div>' +
-    '<div class="box-action-row">' +
-      '<button class="add-part-to-box-btn" onclick="addPartToBox(' + bIdx + ')">+ Add part to box</button>' +
-      (isLast ? '<button class="add-new-box-btn" onclick="addNewBox()">+ Add box</button>' : '') +
-    '</div>' +
-    '<button class="print-box-btn" onclick="printBoxTag(' + bIdx + ')">🖨 Print tag for Box ' + (bIdx + 1) + '</button>' +
-  '</div>';
-}
-
-function renderPartEntry(bIdx, pIdx, part, items, canRemove) {
-  var optionsHtml = '<option value="">Select part…</option>' +
-    items.map(function(item) {
-      var sel = part.itemCode === item.itemCode ? ' selected' : '';
-      return '<option value="' + item.itemCode + '"' + sel + '>' + item.itemCode + (item.description ? ' — ' + item.description : '') + '</option>';
-    }).join('');
-  return '<div class="box-part-entry">' +
-    '<div class="part-select-row">' +
-      '<select class="part-select" onchange="updatePartField(' + bIdx + ',' + pIdx + ',\'itemCode\',this.value)">' + optionsHtml + '</select>' +
-      (canRemove ? '<button class="remove-btn" onclick="removePartFromBox(' + bIdx + ',' + pIdx + ')">✕</button>' : '') +
-    '</div>' +
-    '<div class="part-field-row">' +
-      '<div class="pkg-field"><label>Qty pulled (feet)</label>' +
-        '<input type="number" value="' + (part.qty||'') + '" placeholder="0" oninput="updatePartField(' + bIdx + ',' + pIdx + ',\'qty\',this.value)"/>' +
-      '</div>' +
-      '<div class="pkg-field"><label>Weight (lbs)</label>' +
-        '<input type="number" value="' + (part.weight||'') + '" placeholder="0" oninput="updatePartField(' + bIdx + ',' + pIdx + ',\'weight\',this.value)"/>' +
-      '</div>' +
-    '</div>' +
-    '<div class="pkg-photo-field">' +
-      '<input type="file" accept="image/*" capture="environment" id="photo-input-' + bIdx + '-' + pIdx + '" style="display:none" onchange="handleBoxPhotoNew(' + bIdx + ',' + pIdx + ',this)"/>' +
-      '<button class="photo-btn" onclick="document.getElementById(\'photo-input-' + bIdx + '-' + pIdx + '\').click()">📷 Take photo</button>' +
-      '<div class="photo-preview" id="photo-' + bIdx + '-' + pIdx + '">' + (part.photoUrl ? '<img src="' + part.photoUrl + '"/>' : '') + '</div>' +
-    '</div>' +
-  '</div>';
-}
-
-function updatePartField(bIdx, pIdx, field, value) {
-  if (!_pkgBoxes[bIdx] || !_pkgBoxes[bIdx].parts[pIdx]) return;
-  _pkgBoxes[bIdx].parts[pIdx][field] = (field === 'qty' || field === 'weight') ? (parseFloat(value) || 0) : value;
-}
-
-function addPartToBox(bIdx) {
-  if (!_pkgBoxes[bIdx]) return;
-  _pkgBoxes[bIdx].parts.push({ itemCode:'', qty:0, weight:0, photoUrl:null });
-  renderAllBoxes();
-}
-
-function removePartFromBox(bIdx, pIdx) {
-  if (!_pkgBoxes[bIdx] || _pkgBoxes[bIdx].parts.length <= 1) return;
-  _pkgBoxes[bIdx].parts.splice(pIdx, 1);
-  renderAllBoxes();
-}
-
-function addNewBox() {
-  _pkgBoxes.push({ parts: [{ itemCode:'', qty:0, weight:0, photoUrl:null }] });
-  renderAllBoxes();
-  setTimeout(function() {
-    var lastBox = document.getElementById('box-section-' + (_pkgBoxes.length - 1));
-    if (lastBox) lastBox.scrollIntoView({ behavior:'smooth' });
-  }, 100);
-}
-
-function deleteBox(bIdx) {
-  if (bIdx === 0 || !_pkgBoxes[bIdx]) return;
-  _pkgBoxes.splice(bIdx, 1);
-  renderAllBoxes();
-}
-
-function compressPhoto(dataUrl, callback) {
-  var img = new Image();
-  img.onload = function() {
-    var maxDim = 640;
-    var w = img.width, h = img.height;
-    if (w > h && w > maxDim) { h = h * (maxDim / w); w = maxDim; }
-    else if (h > maxDim)     { w = w * (maxDim / h); h = maxDim; }
-    var canvas = document.createElement('canvas');
-    canvas.width = w; canvas.height = h;
-    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-    callback(canvas.toDataURL('image/jpeg', 0.5));
-  };
-  img.src = dataUrl;
-}
-
-function handleBoxPhotoNew(bIdx, pIdx, input) {
-  if (!input.files || !input.files[0]) return;
-  var reader = new FileReader();
-  reader.onload = function(e) {
-    compressPhoto(e.target.result, function(compressed) {
-      if (!_pkgBoxes[bIdx] || !_pkgBoxes[bIdx].parts[pIdx]) return;
-      _pkgBoxes[bIdx].parts[pIdx].photoUrl = compressed;
-      var preview = document.getElementById('photo-' + bIdx + '-' + pIdx);
-      if (preview) preview.innerHTML = '<img src="' + compressed + '"/>';
-    });
-  };
-  reader.readAsDataURL(input.files[0]);
-}
-
-function collectPackagePayload(complete) {
-  if (!_currentPkgData) return null;
-  var h = _currentPkgData.header;
-  var totalBoxes = _pkgBoxes.length;
-  var boxes = [];
-  _pkgBoxes.forEach(function(box, bIdx) {
-    box.parts.forEach(function(part) {
-      if (part.itemCode) {
-        boxes.push({ itemCode:part.itemCode, boxIndex:bIdx+1, totalBoxes:totalBoxes,
-                     qtyInBox:parseFloat(part.qty)||0, weight:parseFloat(part.weight)||0 });
-      }
-    });
-  });
-  return { orderNumber:h.orderNumber, boxes:boxes, complete:complete };
-}
-
-function savePackageDraft() {
-  var payload = collectPackagePayload(false);
-  if (!payload) return;
-  var btn = document.getElementById('savePkgBtn');
-  btn.disabled = true; btn.textContent = 'Saving…';
-
-  apiFetch('savePackageData', payload)
-    .then(function(res) {
-      btn.disabled = false; btn.textContent = 'Save for later';
-      if (!res.success) {
-        showErrorPanel('Couldn\'t save order #' + _currentPkgData.header.orderNumber, [res.error || 'Unknown error from server']);
-        return;
-      }
-      hideErrorPanel();
-
-      var h      = _currentPkgData.header;
-      var photos = collectPhotos();
-
-      photos.forEach(function(p) {
-        _sessionPhotos[h.orderNumber + '|' + p.boxIdx + '|' + p.partCode] =
-          'data:image/' + (p.ext === 'png' ? 'png' : 'jpeg') + ';base64,' + p.base64;
-      });
-
-      // Upload photos now so they survive leaving the page — no label PDF yet
-      if (photos.length) {
-        apiFetchPost({
-          action: 'saveOrderFiles',
-          orderNo: h.orderNumber,
-          location: h.location || 'MCM',
-          completionDate: h.promiseDate || new Date().toISOString().split('T')[0],
-          pdfBase64: null,
-          photos: photos
-        }).catch(function() {});
-      }
-
-      showToast('Saved!', 'success');
-      setTimeout(exitPackageDetail, 700);
-    })
-    .catch(function(err) {
-      btn.disabled = false; btn.textContent = 'Save for later';
-      showErrorPanel('Couldn\'t save order #' + _currentPkgData.header.orderNumber, ['Connection problem — ' + ((err && err.message) || 'check signal and try again')]);
-    });
-}
-// Most that can ship without over-sending. Foot-based parts cut to a set
-// length round up to whole pieces: 9 ft of 112" bars = 1 bar = 9.33 ft.
-// Everything else (EACH, no length in the code) must match exactly.
-function maxShippable(item) {
-  var req   = Number(item.qtyRequired) || 0;
-  var uom   = String(item.uom || '').toUpperCase();
-  var lenIn = trailingLength(item.itemCode);
-  if ((uom === 'FEET' || uom === 'FT') && lenIn && lenIn > 0) {
-    var pieceFt = lenIn / 12;
-    var pieces  = Math.ceil(req / pieceFt - 1e-9);
-    return Math.round(pieces * pieceFt * 100) / 100;
-  }
-  return req;
+function goToBox(bIdx) {
+  var el = document.getElementById('box-section-' + bIdx);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // Everything that stops an order from being completed, in plain words
@@ -3243,7 +1461,8 @@ function packagingProblems() {
   return out;
 }
 
-function completeOrder() {
+// weightsCleared = true when they pressed "All clear — ready to ship"
+function completeOrder(weightsCleared) {
   var payload = collectPackagePayload(true);
   if (!payload) return;
   var orderNo = _currentPkgData.header.orderNumber;
@@ -3254,6 +1473,13 @@ function completeOrder() {
     return;
   }
   hideErrorPanel();
+
+  // Weights are a double-check, never a block: show the pop-up once,
+  // and "All clear — ready to ship" completes the order as-is
+  if (weightsCleared !== true) {
+    var issues = weightIssues();
+    if (issues.length) { showWeightReview(issues); return; }
+  }
 
   var btn = document.getElementById('completePkgBtn');
   btn.disabled = true; btn.textContent = 'Completing…';
